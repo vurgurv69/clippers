@@ -1,0 +1,279 @@
+/* —— Color wheels (LGG) —— */
+.color-wheels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.color-wheel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.cw-pad {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--cw-hue, #1f9d7a) 55%, transparent);
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--cw-hue) 22%, transparent) 0%, transparent 62%),
+    conic-gradient(from 210deg, #1a3a4a, #2d6a5a, #4a3a1a, #3a2a4a, #1a3a4a);
+  cursor: crosshair;
+  padding: 0;
+}
+.cw-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f2f7f5;
+  border: 1px solid #0f1c1a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.cw-label {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.cw-val {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+
+/* —— Markers —— */
+.marker-rail {
+  position: relative;
+  height: 18px;
+  margin: 0 0 4px;
+  background: color-mix(in srgb, var(--studio-line, #2a3f3a) 40%, transparent);
+  border-radius: 3px;
+}
+.marker-tick {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--mk, #e2a03f);
+  transform: translateX(-50%);
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+.marker-tick::after {
+  content: attr(data-label);
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  font-size: 9px;
+  white-space: nowrap;
+  color: var(--mk, #e2a03f);
+  pointer-events: none;
+}
+.marker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow: auto;
+}
+.marker-row {
+  display: grid;
+  grid-template-columns: 64px 1fr 28px auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+.marker-row input[type="number"] {
+  font-size: 12px;
+  padding: 2px 4px;
+  width: 100%;
+}
+.marker-row input[type="color"] {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.marker-row input {
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+/* —— Float panels —— */
+.studio-shell.float-bin .studio-bin,
+.studio-shell.float-inspector .studio-inspector {
+  position: fixed;
+  z-index: 40;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  border-radius: 10px;
+  max-height: min(80vh, 720px);
+  overflow: auto;
+}
+.studio-shell.float-bin .studio-bin {
+  left: 16px;
+  top: 72px;
+  width: 240px;
+}
+.studio-shell.float-inspector .studio-inspector.studio-dock {
+  left: 50%;
+  right: auto;
+  top: auto;
+  bottom: 36px;
+  transform: translateX(-50%);
+  width: min(920px, 92vw);
+  max-height: 34vh;
+}
+
+/* —— Adjustment clips —— */
+.clip-block.adjustment {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, #8b5cf6 35%, transparent),
+    color-mix(in srgb, #8b5cf6 35%, transparent) 6px,
+    color-mix(in srgb, #6d28d9 25%, transparent) 6px,
+    color-mix(in srgb, #6d28d9 25%, transparent) 12px
+  );
+  border-style: dashed;
+}
+
+.preview-program {
+  position: absolute;
+  inset: 0;
+}
+.preview-program video,
+.preview-program .preview-image,
+.preview-program .preview-overlay,
+.preview-program .preview-transition-in,
+.preview-program canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.preview-transition-in {
+  pointer-events: none;
+  z-index: 2;
+}
+.preview-transition-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.preview-adj-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: #808080;
+  z-index: 4;
+}
+.lottie-host {
+  width: 100%;
+  height: auto;
+  min-height: 2em;
+  display: block;
+}
+.bin-item.has-proxy::after {
+  content: "PX";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, #0d9488 85%, black);
+  color: #ecfdf5;
+}
+.bin-item.has-proxy {
+  position: relative;
+}
+.audio-block.sfx {
+  opacity: 0.92;
+  border-style: dashed;
+}
+
+/* —— Compound / multicam —— */
+.clip-block.compound {
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, #0d9488 40%, transparent),
+    color-mix(in srgb, #0d9488 40%, transparent) 8px,
+    color-mix(in srgb, #134e4a 30%, transparent) 8px,
+    color-mix(in srgb, #134e4a 30%, transparent) 16px
+  );
+  border-style: double;
+}
+.clip-block.multicam {
+  outline: 2px dashed #f59e0b;
+}
+.clip-block.multicam.live {
+  outline-color: #22c55e;
+}
+.clip-block.mc-inactive {
+  pointer-events: auto;
+}
+.clip-block .clip-wave {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40%;
+  width: 100%;
+  object-fit: fill;
+  opacity: 0.55;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+/* —— Curved text preview —— */
+.text-layer.curved {
+  letter-spacing: 0.08em;
+}
+.text-layer.curved .curved-char {
+  display: inline-block;
+}
+
+/* —— WebGL fx canvas —— */
+.fx-gl-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mix-blend-mode: normal;
+  z-index: 2;
+}
+
+/* —— Sticker pack grid —— */
+.sticker-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.sticker-pack-btn {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 1px solid var(--em-line, #2a3f3a);
+  background: color-mix(in srgb, #0f1c1a 40%, transparent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 4px;
+}
+.sticker-pack-btn img,
+.sticker-pack-btn svg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+

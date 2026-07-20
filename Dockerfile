@@ -24,7 +24,7 @@ ENV FFPROBE_PATH=/usr/bin/ffprobe
 ENV YT_DLP_PATH=/usr/local/bin/yt-dlp
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg ca-certificates curl \
+    ffmpeg ca-certificates curl python3 \
     && rm -rf /var/lib/apt/lists/* \
     && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
       -o /usr/local/bin/yt-dlp \

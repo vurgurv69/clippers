@@ -39,6 +39,6 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 COPY --from=builder /app/next.config.ts ./next.config.ts
 
-VOLUME ["/app/.data"]
+# Persist projects via Railway volume mounted at /app/.data (do not use Docker VOLUME)
 EXPOSE 3000
 CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]

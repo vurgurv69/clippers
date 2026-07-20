@@ -40,5 +40,6 @@ COPY --from=builder /app/package-lock.json ./package-lock.json
 COPY --from=builder /app/next.config.ts ./next.config.ts
 
 # Persist projects via Railway volume mounted at /app/.data (do not use Docker VOLUME)
+# Railway injects PORT — must listen on it for healthchecks / public routing
 EXPOSE 3000
-CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]
+CMD ["sh", "-c", "npx next start -H 0.0.0.0 -p ${PORT:-3000}"]

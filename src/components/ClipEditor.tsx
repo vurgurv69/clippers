@@ -338,8 +338,8 @@ export function ClipEditor({
             <h2 className="editor-title">{clip.title}</h2>
           </div>
           <div className="editor-top-actions">
-            <button className="btn ghost" onClick={onClose}>
-              Close
+            <button className="btn ghost" onClick={onClose} title="Back to Clippers">
+              ← Back
             </button>
             <button className="btn primary" onClick={exportEdit} disabled={exporting}>
               {exporting ? "Exporting…" : "Export video"}

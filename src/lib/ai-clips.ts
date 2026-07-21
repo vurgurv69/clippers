@@ -1,54 +1,14 @@
 import path from "path";
 import { ffmpegPath, runCommand } from "./binaries";
+import { buildSocialPack, scoreClipWindow } from "./clip-quality";
 import { jobDir } from "./jobs";
-import { topicHookFromTranscript, topicTitleFromTranscript } from "./topic-title";
+import { hasOpenAiKey, llmComplete, parseLlmJson } from "./llm";
+import {
+  detectScriptLanguage,
+  topicHookFromTranscript,
+  topicTitleFromTranscript,
+} from "./topic-title";
 import type { ClipPlan, TranscriptSegment } from "./types";
-
-const HOOK_WORDS = [
-  "secret",
-  "actually",
-  "wait",
-  "never",
-  "always",
-  "wrong",
-  "mistake",
-  "truth",
-  "insane",
-  "crazy",
-  "shocking",
-  "because",
-  "here's",
-  "heres",
-  "why",
-  "how",
-  "stop",
-  "don't",
-  "dont",
-  "nobody",
-  "everyone",
-  "finally",
-  "warning",
-  "imagine",
-  "what if",
-  "the problem",
-  "the reason",
-  "listen",
-  "check this",
-  "watch this",
-  "game changer",
-  "pro tip",
-  // Arabic hooks
-  "سر",
-  "انتظر",
-  "لما",
-  "لماذا",
-  "حقيقة",
-  "مستحيل",
-  "شوف",
-  "انظر",
-  "مهم",
-  "صدق",
-];
 
 const DEAD_WORDS = [
   "subscribe",
@@ -69,7 +29,46 @@ const DEAD_WORDS = [
 /** Long-form (YouTube etc.): aim for 40–60s cuts. Short sources keep full length. */
 const LONG_CLIP_MIN = 40;
 const LONG_CLIP_MAX = 60;
-const SHORT_SOURCE_MAX = 40; // under this → export whole video / short windows
+const SHORT_SOURCE_MAX = 40;
+
+function enrichPlan(
+  plan: ClipPlan,
+  segments: TranscriptSegment[],
+  activeOverlap = 0.7,
+  duration = 120,
+): ClipPlan {
+  const q = scoreClipWindow({
+    segments,
+    start: plan.start,
+    end: plan.end,
+    activeOverlap,
+    duration,
+  });
+  const text = windowText(segments, plan.start, plan.end);
+  const lang = detectScriptLanguage(text || plan.title);
+  const social = buildSocialPack({
+    title: plan.title,
+    hook: plan.hook,
+    text,
+    lang,
+  });
+  return {
+    ...plan,
+    viralityScore: plan.viralityScore || q.viralityScore,
+    retentionScore: q.retentionScore,
+    hookScore: q.hookScore,
+    confidenceScore: q.confidenceScore,
+    captionQuality: q.captionQuality,
+    reason:
+      plan.reason.includes("·")
+        ? `${plan.reason} · ${q.reasons[0] || ""}`.trim()
+        : `Clippers score · ${q.reasons.join(" + ")}`,
+    description: social.description,
+    hashtags: social.hashtags,
+    pinnedComment: social.pinnedComment,
+    cta: social.cta,
+  };
+}
 
 function clampClip(
   start: number,
@@ -125,15 +124,20 @@ function shortSourcePlans(opts: {
   });
 
   return [
-    {
-      id: "clip-1",
-      title: clipTitle,
-      hook: topicHookFromTranscript(text, clipTitle),
-      start,
-      end,
-      viralityScore: 88,
-      reason: "Short source · full video export (under 40s)",
-    },
+    enrichPlan(
+      {
+        id: "clip-1",
+        title: clipTitle,
+        hook: topicHookFromTranscript(text, clipTitle),
+        start,
+        end,
+        viralityScore: 88,
+        reason: "Short source · full video export (under 40s)",
+      },
+      segments,
+      0.85,
+      duration,
+    ),
   ];
 }
 
@@ -153,18 +157,6 @@ function windowText(
 function countMatches(text: string, phrases: string[]) {
   const lower = text.toLowerCase();
   return phrases.reduce((n, p) => n + (lower.includes(p) ? 1 : 0), 0);
-}
-
-function speechDensity(
-  segments: TranscriptSegment[],
-  start: number,
-  end: number,
-) {
-  const words = segments
-    .flatMap((s) => s.words)
-    .filter((w) => w.start >= start && w.end <= end);
-  const duration = Math.max(end - start, 1);
-  return words.length / duration;
 }
 
 /** Parse ffmpeg silencedetect noise regions → prefer loud/active audio. */
@@ -233,9 +225,97 @@ function activeOverlap(
   return overlap / Math.max(end - start, 1);
 }
 
+/** When OpenAI is configured, refine / pick viral windows from the transcript. */
+async function llmPickClips(opts: {
+  videoTitle: string;
+  duration: number;
+  segments: TranscriptSegment[];
+}): Promise<ClipPlan[] | null> {
+  if (!hasOpenAiKey()) return null;
+  const { videoTitle, duration, segments } = opts;
+  if (!segments.length) return null;
+
+  // Compact timed lines so the model sees structure without a huge prompt.
+  const lines = segments
+    .slice(0, 180)
+    .map((s) => `[${s.start.toFixed(1)}-${s.end.toFixed(1)}] ${s.text}`)
+    .join("\n")
+    .slice(0, 10_000);
+
+  const { text, usedLlm } = await llmComplete({
+    system: `You pick viral short-form clips from a long video transcript.
+Return ONLY JSON: {"clips":[{"start":number,"end":number,"title":string,"hook":string,"reason":string,"viralityScore":number}]}
+Rules: 2–4 clips; each 40–60s; start/end within 0..${duration.toFixed(1)}; prefer hooks, questions, reveals; titles under 8 words; Arabic or English matching the transcript; no subscribe/CTA windows.`,
+    user: `Video title: ${videoTitle}\nDuration: ${duration.toFixed(1)}s\nTranscript:\n${lines}`,
+    maxTokens: 900,
+    temperature: 0.4,
+  });
+  if (!usedLlm) return null;
+
+  const parsed = parseLlmJson<{
+    clips?: Array<{
+      start?: number;
+      end?: number;
+      title?: string;
+      hook?: string;
+      reason?: string;
+      viralityScore?: number;
+    }>;
+  }>(text);
+  if (!parsed?.clips?.length) return null;
+
+  const usedTitles = new Set<string>();
+  const plans: ClipPlan[] = [];
+  for (const c of parsed.clips) {
+    if (plans.length >= 4) break;
+    const rawStart = Number(c.start);
+    const rawEnd = Number(c.end);
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
+    const { start, end } = clampClip(rawStart, rawEnd, duration, "long");
+    if (end - start < 20) continue;
+    const overlaps = plans.some((p) => {
+      const o = Math.min(p.end, end) - Math.max(p.start, start);
+      return o > 18;
+    });
+    if (overlaps) continue;
+
+    const window = windowText(segments, start, end);
+    let title = (c.title || "").trim();
+    if (!title || usedTitles.has(title.toLowerCase())) {
+      title = topicTitleFromTranscript({
+        text: window,
+        videoTitle,
+        start,
+        usedTitles,
+      });
+    } else {
+      usedTitles.add(title.toLowerCase());
+    }
+    plans.push(
+      enrichPlan(
+        {
+          id: `clip-${plans.length + 1}`,
+          title,
+          hook: (c.hook || "").trim() || topicHookFromTranscript(window, title),
+          start,
+          end,
+          viralityScore: Math.max(
+            55,
+            Math.min(98, Math.round(Number(c.viralityScore) || 82)),
+          ),
+          reason: `AI pick · ${(c.reason || "strong moment").slice(0, 80)}`,
+        },
+        segments,
+        0.8,
+        duration,
+      ),
+    );
+  }
+  return plans.length ? plans : null;
+}
+
 /**
- * Clippers' own viral picker — no ChatGPT.
- * Scores windows, then titles each clip from what is actually said.
+ * Viral picker: OpenAI when configured, else local scoring from transcript + audio.
  */
 export async function pickViralClips(opts: {
   jobId: string;
@@ -255,16 +335,21 @@ export async function pickViralClips(opts: {
     return shortSourcePlans({ duration, segments, videoTitle });
   }
 
+  // Prefer LLM picks when key + transcript exist (falls back to heuristics).
+  const llmPlans = await llmPickClips({ videoTitle, duration, segments });
+  if (llmPlans?.length) return llmPlans.map((p) => enrichPlan(p, segments, 0.8, duration));
+
   // Longer sources (YouTube etc.) → 40–60s viral cuts
   const active = await detectActiveRanges(jobId, videoPath, duration);
   const targetLens = [45, 50, 55];
-  const step = 8;
+  const step = 6;
   const scored: Array<{
     start: number;
     end: number;
     score: number;
     text: string;
     reason: string;
+    quality: ReturnType<typeof scoreClipWindow>;
   }> = [];
 
   const introGuard = Math.min(12, duration * 0.04);
@@ -278,43 +363,31 @@ export async function pickViralClips(opts: {
       if (end > outroGuard && duration > 90) continue;
 
       const text = windowText(segments, start, end);
-      const density = speechDensity(segments, start, end);
-      const hooks = countMatches(text, HOOK_WORDS);
-      const dead = countMatches(text, DEAD_WORDS);
-      const questions = (text.match(/\?/g) || []).length;
       const overlap = activeOverlap(active, start, end);
-      const earlyHookBoost =
-        countMatches(windowText(segments, start, start + 3), HOOK_WORDS) * 8;
+      const quality = scoreClipWindow({
+        segments,
+        start,
+        end,
+        activeOverlap: overlap,
+        duration,
+      });
+      const dead = countMatches(text, DEAD_WORDS);
 
-      // Weighted "will this get views?" score — our own model
       let score =
-        density * 14 +
-        hooks * 10 +
-        questions * 6 +
-        overlap * 25 +
-        earlyHookBoost -
-        dead * 18;
-
-      // Prefer mid-video energy on long uploads
-      const mid = duration / 2;
-      const dist = Math.abs((start + end) / 2 - mid) / mid;
-      score += (1 - dist) * 8;
+        quality.viralityScore +
+        quality.hookScore * 0.25 +
+        quality.retentionScore * 0.2 -
+        dead * 12;
 
       if (!text && overlap < 0.4) score -= 20;
-
-      const reasons: string[] = [];
-      if (hooks) reasons.push("hook language");
-      if (density > 2.2) reasons.push("fast dialogue");
-      if (questions) reasons.push("curiosity beats");
-      if (overlap > 0.75) reasons.push("loud/active audio");
-      if (!reasons.length) reasons.push("strong activity window");
 
       scored.push({
         start,
         end,
         score,
         text,
-        reason: reasons.slice(0, 2).join(" + "),
+        reason: quality.reasons.slice(0, 2).join(" + "),
+        quality,
       });
     }
   }
@@ -333,12 +406,7 @@ export async function pickViralClips(opts: {
     if (overlapsExisting) continue;
 
     const { start, end } = clampClip(cand.start, cand.end, duration, "long");
-    // Use THIS clip's window text only (not the whole video)
     const text = windowText(segments, start, end) || cand.text;
-    const viralityScore = Math.max(
-      55,
-      Math.min(98, Math.round(60 + cand.score / 3)),
-    );
     const clipTitle = topicTitleFromTranscript({
       text,
       videoTitle,
@@ -346,15 +414,22 @@ export async function pickViralClips(opts: {
       usedTitles,
     });
 
-    picked.push({
-      id: `clip-${picked.length + 1}`,
-      title: clipTitle,
-      hook: topicHookFromTranscript(text, clipTitle),
-      start,
-      end,
-      viralityScore,
-      reason: `Clippers score · ${cand.reason}`,
-    });
+    picked.push(
+      enrichPlan(
+        {
+          id: `clip-${picked.length + 1}`,
+          title: clipTitle,
+          hook: topicHookFromTranscript(text, clipTitle),
+          start,
+          end,
+          viralityScore: cand.quality.viralityScore,
+          reason: `Clippers score · ${cand.reason}`,
+        },
+        segments,
+        activeOverlap(active, start, end),
+        duration,
+      ),
+    );
   }
 
   if (!picked.length) {
@@ -372,15 +447,22 @@ export async function pickViralClips(opts: {
         start: s,
         usedTitles,
       });
-      picked.push({
-        id: `clip-${i + 1}`,
-        title: clipTitle,
-        hook: topicHookFromTranscript(text, clipTitle),
-        start: s,
-        end: e,
-        viralityScore: 72 - i * 4,
-        reason: "Clippers fallback · evenly spaced active window",
-      });
+      picked.push(
+        enrichPlan(
+          {
+            id: `clip-${i + 1}`,
+            title: clipTitle,
+            hook: topicHookFromTranscript(text, clipTitle),
+            start: s,
+            end: e,
+            viralityScore: 72 - i * 4,
+            reason: "Clippers fallback · evenly spaced active window",
+          },
+          segments,
+          0.6,
+          duration,
+        ),
+      );
     }
   }
 

@@ -1,7 +1,18 @@
 import fs from "fs/promises";
 import path from "path";
 import { parseCaptionsEnabled } from "./captions-flag";
-import type { AspectRatio, Job, JobStatus, LayoutMode } from "./types";
+import type {
+  AspectRatio,
+  CaptionReadMode,
+  CaptionThemeId,
+  DownloadHint,
+  ExportCodec,
+  ExportQuality,
+  Job,
+  JobStatus,
+  LayoutMode,
+  WhisperQuality,
+} from "./types";
 
 const DATA_ROOT = path.join(process.cwd(), ".data");
 
@@ -23,6 +34,14 @@ export async function createJob(
     aspectRatio?: AspectRatio;
     layoutMode?: LayoutMode;
     captionsEnabled?: boolean;
+    downloadHint?: DownloadHint;
+    whisperQuality?: WhisperQuality;
+    captionTheme?: CaptionThemeId;
+    captionReadMode?: CaptionReadMode;
+    captionEmojis?: boolean;
+    exportQuality?: ExportQuality;
+    exportCodec?: ExportCodec;
+    preferHwEncode?: boolean;
   } = {},
 ): Promise<Job> {
   await ensureDataDirs();
@@ -37,6 +56,16 @@ export async function createJob(
     aspectRatio: opts.aspectRatio || "9:16",
     layoutMode: opts.layoutMode || "auto",
     captionsEnabled: parseCaptionsEnabled(opts.captionsEnabled, true),
+    downloadHint: opts.downloadHint || "auto",
+    whisperQuality: opts.whisperQuality || "fast",
+    captionTheme: opts.captionTheme || "tiktok-bold",
+    captionReadMode: opts.captionReadMode || "readable",
+    captionEmojis: opts.captionEmojis !== false,
+    exportQuality: opts.exportQuality || "very-high",
+    exportCodec: opts.exportCodec || "h264",
+    preferHwEncode: opts.preferHwEncode !== false,
+    stageStartedAt: now,
+    currentTask: "queued",
     clips: [],
     createdAt: now,
     updatedAt: now,
@@ -55,14 +84,38 @@ export async function getJob(id: string): Promise<Job | null> {
   try {
     const raw = await fs.readFile(jobJsonPath(id), "utf8");
     const job = JSON.parse(raw) as Job;
-    // Back-compat for older jobs
     job.aspectRatio = job.aspectRatio || "9:16";
     job.layoutMode = job.layoutMode || "auto";
     job.captionsEnabled = parseCaptionsEnabled(job.captionsEnabled, true);
+    job.whisperQuality = job.whisperQuality || "fast";
+    job.captionTheme = job.captionTheme || "tiktok-bold";
+    job.captionReadMode = job.captionReadMode || "readable";
+    job.exportQuality = job.exportQuality || "very-high";
+    job.exportCodec = job.exportCodec || "h264";
+    if (job.preferHwEncode == null) job.preferHwEncode = true;
     return job;
   } catch {
     return null;
   }
+}
+
+/** Recent jobs for history UI (newest first). */
+export async function listJobs(limit = 24): Promise<Job[]> {
+  await ensureDataDirs();
+  const root = path.join(DATA_ROOT, "jobs");
+  let ids: string[] = [];
+  try {
+    ids = await fs.readdir(root);
+  } catch {
+    return [];
+  }
+  const jobs: Job[] = [];
+  for (const id of ids) {
+    const job = await getJob(id);
+    if (job) jobs.push(job);
+  }
+  jobs.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return jobs.slice(0, Math.max(1, limit));
 }
 
 export async function updateJob(
@@ -72,6 +125,19 @@ export async function updateJob(
   const job = await getJob(id);
   if (!job) throw new Error(`Job ${id} not found`);
   const next = { ...job, ...patch };
+  if (patch.status && patch.status !== job.status) {
+    next.stageStartedAt = new Date().toISOString();
+  }
+  const started = new Date(next.createdAt).getTime();
+  next.elapsedMs = Math.max(0, Date.now() - started);
+  // Rough ETA from progress
+  if (next.progress > 5 && next.progress < 100) {
+    const rate = next.elapsedMs / next.progress;
+    next.etaMs = Math.round(rate * (100 - next.progress));
+  } else if (next.progress >= 100) {
+    next.etaMs = 0;
+  }
+  if (patch.message) next.currentTask = patch.message;
   await saveJob(next);
   return next;
 }

@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { ffmpegPath, ffprobePath, runCommand } from "./binaries";
+import { sampleTrackAt, smoothTrack, type TrackBox } from "./clip-tracking";
 import { jobDir } from "./jobs";
 import type { LayoutMode } from "./types";
 
@@ -175,13 +176,19 @@ export async function decideLayout(opts: {
   await fs.mkdir(frameDir, { recursive: true });
 
   let best: PersonBox | null = null;
+  const detections: TrackBox[] = [];
   for (let i = 0; i < samples.length; i++) {
+    const t = samples[i];
     const framePath = path.join(frameDir, `sample-${Date.now()}-${i}.jpg`);
     try {
-      await grabFrame(videoPath, samples[i], framePath);
+      await grabFrame(videoPath, t, framePath);
       const person = await detectPersonOnFrame(framePath, imgW, imgH);
-      if (person && (!best || person.score * person.areaRatio > best.score * best.areaRatio)) {
-        best = person;
+      if (person) {
+        const crop = faceCropFromPerson(person, imgW, imgH);
+        detections.push({ t: t - clipStart, ...crop });
+        if (!best || person.score * person.areaRatio > best.score * best.areaRatio) {
+          best = person;
+        }
       }
     } catch {
       // keep trying other samples
@@ -190,17 +197,30 @@ export async function decideLayout(opts: {
 
   if (!best) {
     return {
-      mode: layoutMode === "face-top" ? "fill" : "fill",
+      mode: "fill",
       reason: "No person detected — fill crop",
     };
   }
+
+  // Ease multi-sample face boxes (reject teleports, sample mid-clip)
+  const smoothed = smoothTrack(detections);
+  const midRel = (clipEnd - clipStart) / 2;
+  const eased = sampleTrackAt(smoothed, midRel);
+  const face = eased
+    ? {
+        x: Math.round(eased.x),
+        y: Math.round(eased.y),
+        w: Math.round(eased.w),
+        h: Math.round(eased.h),
+      }
+    : faceCropFromPerson(best, imgW, imgH);
 
   // Talking-head / selfie: person dominates the frame → don't overlay
   if (best.areaRatio >= 0.3 && layoutMode !== "face-top") {
     return {
       mode: "fill",
       reason: "Talking head — keep full person framing",
-      face: faceCropFromPerson(best, imgW, imgH),
+      face,
     };
   }
 
@@ -208,11 +228,11 @@ export async function decideLayout(opts: {
   if (layoutMode === "face-top" || best.areaRatio < 0.3) {
     return {
       mode: "face-top",
-      face: faceCropFromPerson(best, imgW, imgH),
+      face,
       reason:
         layoutMode === "face-top"
-          ? "Face pinned on top (manual)"
-          : "Facecam detected — face on top of content",
+          ? "Face on top · smoothed track · gameplay below"
+          : "Facecam detected — smoothed face track over gameplay",
     };
   }
 
@@ -243,17 +263,16 @@ export function buildVideoFilters(opts: {
   }
 
   const { x, y, w, h } = layout.face;
-  // Face bubble ~36% of canvas width, sitting near the top
-  const faceW = Math.round(outW * 0.36);
-  const faceH = Math.round(faceW * 1.15);
-  const marginTop = Math.round(outH * 0.04);
+  // True split: face on top (~30%), gameplay below — more room = less zoom.
+  const facePanelH = Math.round(outH * 0.3);
+  const gamePanelH = Math.max(1, outH - facePanelH);
 
-  // split → full-frame background + face crop overlay, then optional captions
   const parts = [
-    `[0:v]split=2[bg][fg]`,
-    `[bg]${base}[base]`,
-    `[fg]crop=${w}:${h}:${x}:${y},scale=${faceW}:${faceH}:force_original_aspect_ratio=increase,crop=${faceW}:${faceH},setsar=1[face]`,
-    `[base][face]overlay=(W-w)/2:${marginTop}[laid]`,
+    `[0:v]split=2[vface][vgame]`,
+    `[vface]crop=${w}:${h}:${x}:${y},scale=${outW}:${facePanelH}:force_original_aspect_ratio=increase,crop=${outW}:${facePanelH},setsar=1[face]`,
+    // Milder cover on gameplay panel + slight edge soften feel via scale
+    `[vgame]scale=${outW}:${gamePanelH}:force_original_aspect_ratio=increase,crop=${outW}:${gamePanelH},eq=contrast=1.03:saturation=1.05,setsar=1[game]`,
+    `[face][game]vstack=inputs=2[laid]`,
   ];
   if (burnCaptions) {
     parts.push(`[laid]ass=${assName}[vout]`);

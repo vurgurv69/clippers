@@ -479,6 +479,7 @@ export function StudioEditor({
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(project.updatedAt || null);
   const [saving, setSaving] = useState(false);
   const dirtyRef = useRef(true);
+  const savingRef = useRef(false);
 
   // Transition preview panel
   const [previewTransition, setPreviewTransition] = useState<TransitionKind>("crossfade");
@@ -651,7 +652,8 @@ export function StudioEditor({
   }, [clips, texts, music, musicTracks, markers, aspect, tracks, freeV1, growthPack, brandKit, calendarEvents, aiSuggestions]);
 
   const saveProjectState = useCallback(async (silent = false) => {
-    if (saving) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       const res = await fetch(`/api/editor/project/${project.id}/save`, {
@@ -684,17 +686,29 @@ export function StudioEditor({
         pushToast(err instanceof Error ? err.message : "Save failed", "error");
       }
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [saving, project.id, aspect, clips, music, musicTracks, markers, texts, tracks, freeV1, growthPack, brandKit, calendarEvents, aiSuggestions, pushToast]);
+  }, [project.id, aspect, clips, music, musicTracks, markers, texts, tracks, freeV1, growthPack, brandKit, calendarEvents, aiSuggestions, pushToast]);
 
   // Autosave every ~4s when dirty
   useEffect(() => {
     const t = setInterval(() => {
-      if (dirtyRef.current && !saving) saveProjectState(true);
+      if (dirtyRef.current && !savingRef.current) saveProjectState(true);
     }, 4000);
     return () => clearInterval(t);
-  }, [saveProjectState, saving]);
+  }, [saveProjectState]);
+
+  const handleBackHome = useCallback(async () => {
+    const start = Date.now();
+    while (savingRef.current && Date.now() - start < 5000) {
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    if (dirtyRef.current) {
+      await saveProjectState(true);
+    }
+    onClose();
+  }, [onClose, saveProjectState]);
 
   function toggleFavAsset(id: string) {
     setFavAssets((prev) => {
@@ -4248,7 +4262,7 @@ export function StudioEditor({
           canRedo={historyInfo.canRedo}
           onUndo={undo}
           onRedo={redo}
-          onClose={onClose}
+          onClose={handleBackHome}
           exporting={exporting}
           onCancelExport={cancelExport}
           onExport={() => setShowExport(true)}

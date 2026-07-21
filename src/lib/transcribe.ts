@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
 import { ffmpegPath, runCommand } from "./binaries";
 import { jobDir } from "./jobs";
@@ -22,34 +23,59 @@ type Transcriber = (
 ) => Promise<WhisperResult>;
 
 const SAMPLE_RATE = 16000;
-const CHUNK_SECONDS = 28;
+/** Larger chunks = fewer model calls (biggest local speed win after tiny model). */
+const CHUNK_SECONDS = 30;
+/** Skip near-silent audio more aggressively so Whisper isn't run on dead air. */
+const SILENCE_ENERGY = 0.012;
+/**
+ * Cap how much speech we feed Whisper. Long YouTube videos were taking ages;
+ * active-audio scoring still covers the rest of the timeline.
+ */
+const MAX_ASR_SECONDS = Number(process.env.WHISPER_MAX_SECONDS || 600);
 
 let transcriberPromise: Promise<Transcriber> | null = null;
+let loadedModelId: string | null = null;
 
-async function getTranscriber(): Promise<Transcriber> {
-  if (!transcriberPromise) {
-    transcriberPromise = (async () => {
-      const { pipeline, env } = await import("@xenova/transformers");
-      env.allowLocalModels = false;
-      env.useBrowserCache = false;
+function modelForQuality(quality?: string) {
+  const q = (quality || process.env.WHISPER_QUALITY || "fast").toLowerCase();
+  if (process.env.WHISPER_MODEL) return process.env.WHISPER_MODEL;
+  if (q === "best" || q === "balanced") return "Xenova/whisper-small";
+  return "Xenova/whisper-tiny";
+}
 
-      // Multilingual — Arabic + English. whisper-small is more accurate for Arabic.
-      const model = process.env.WHISPER_MODEL || "Xenova/whisper-small";
-      try {
-        const asr = await pipeline("automatic-speech-recognition", model, {
-          quantized: true,
-        });
-        return asr as unknown as Transcriber;
-      } catch {
-        const asr = await pipeline(
-          "automatic-speech-recognition",
-          "Xenova/whisper-tiny",
-          { quantized: true },
-        );
-        return asr as unknown as Transcriber;
-      }
-    })();
-  }
+async function getTranscriber(quality?: string): Promise<Transcriber> {
+  const model = modelForQuality(quality);
+  if (transcriberPromise && loadedModelId === model) return transcriberPromise;
+
+  loadedModelId = model;
+  transcriberPromise = (async () => {
+    const { pipeline, env } = await import("@xenova/transformers");
+    env.allowLocalModels = false;
+    env.useBrowserCache = false;
+    try {
+      const threads = Math.max(1, Math.min(8, os.cpus().length || 2));
+      const wasm = (env as { backends?: { onnx?: { wasm?: { numThreads?: number } } } })
+        .backends?.onnx?.wasm;
+      if (wasm) wasm.numThreads = threads;
+    } catch {
+      // ignore
+    }
+
+    try {
+      const asr = await pipeline("automatic-speech-recognition", model, {
+        quantized: true,
+      });
+      return asr as unknown as Transcriber;
+    } catch {
+      const asr = await pipeline(
+        "automatic-speech-recognition",
+        "Xenova/whisper-tiny",
+        { quantized: true },
+      );
+      loadedModelId = "Xenova/whisper-tiny";
+      return asr as unknown as Transcriber;
+    }
+  })();
   return transcriberPromise;
 }
 
@@ -170,27 +196,39 @@ function wordsToSegments(words: TranscriptWord[]): TranscriptSegment[] {
   return segments;
 }
 
+function detectLangHint(text: string): "arabic" | "english" | null {
+  const arabic = (text.match(/[\u0600-\u06FF]/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  if (arabic >= 4 && arabic >= latin * 0.4) return "arabic";
+  if (latin >= 8) return "english";
+  return null;
+}
+
 async function transcribeChunk(
   transcriber: Transcriber,
   slice: Float32Array,
   timeOffset: number,
-): Promise<TranscriptWord[]> {
-  // Segment timestamps are more reliable than word timestamps on multilingual models
+  langHint: "arabic" | "english" | null,
+): Promise<{ words: TranscriptWord[]; hint: "arabic" | "english" | null }> {
+  const baseOpts: Record<string, unknown> = {
+    return_timestamps: true,
+    // Smaller stride = less re-processing of overlap (faster).
+    chunk_length_s: 30,
+    stride_length_s: 3,
+    task: "transcribe",
+  };
+  if (langHint) baseOpts.language = langHint;
+
   const result = await transcriber(
     { data: slice, sampling_rate: SAMPLE_RATE },
-    {
-      return_timestamps: true,
-      chunk_length_s: 30,
-      stride_length_s: 5,
-      task: "transcribe",
-    },
+    baseOpts,
   );
 
   let chunks = resultToChunks(result, slice.length / SAMPLE_RATE);
 
-  // Retry with forced language hints if empty
-  if (!chunks.length) {
-    for (const language of ["arabic", "english"] as const) {
+  // Only retry empty chunks once — don't double-run every silent/mumble slice.
+  if (!chunks.length && !langHint) {
+    for (const language of ["english", "arabic"] as const) {
       const retry = await transcriber(
         { data: slice, sampling_rate: SAMPLE_RATE },
         {
@@ -200,11 +238,21 @@ async function transcribeChunk(
         },
       );
       chunks = resultToChunks(retry, slice.length / SAMPLE_RATE);
-      if (chunks.length) break;
+      if (chunks.length) {
+        return {
+          words: chunksToWords(chunks, timeOffset),
+          hint: language,
+        };
+      }
     }
   }
 
-  return chunksToWords(chunks, timeOffset);
+  const words = chunksToWords(chunks, timeOffset);
+  const joined = words.map((w) => w.word).join(" ");
+  return {
+    words,
+    hint: langHint || detectLangHint(joined),
+  };
 }
 
 export type TranscriptResult = {
@@ -215,30 +263,55 @@ export type TranscriptResult = {
 export async function transcribeVideo(
   jobId: string,
   videoPath: string,
+  onProgress?: (pct: number, message: string) => void | Promise<void>,
+  whisperQuality?: string,
 ): Promise<TranscriptResult> {
   const dir = jobDir(jobId);
   const wavPath = path.join(dir, "audio.wav");
   await extractWav(videoPath, wavPath);
+  await onProgress?.(32, "Loading Whisper model…");
 
   const audio = await wavToFloat32(wavPath);
-  const transcriber = await getTranscriber();
+  const transcriber = await getTranscriber(whisperQuality);
   const chunkSamples = CHUNK_SECONDS * SAMPLE_RATE;
   const allWords: TranscriptWord[] = [];
+  const totalChunks = Math.max(1, Math.ceil(audio.length / chunkSamples));
+  let asrSeconds = 0;
+  let langHint: "arabic" | "english" | null = null;
+  let processed = 0;
 
   for (let start = 0; start < audio.length; start += chunkSamples) {
+    if (asrSeconds >= MAX_ASR_SECONDS) break;
+
     const end = Math.min(audio.length, start + chunkSamples);
-    // Skip near-silent chunks
     const slice = audio.subarray(start, end);
     let energy = 0;
     for (let i = 0; i < slice.length; i += 200) {
       energy += Math.abs(slice[i]);
     }
-    if (energy / (slice.length / 200) < 0.008) continue;
+    processed += 1;
+    if (energy / (slice.length / 200) < SILENCE_ENERGY) {
+      if (processed % 2 === 0) {
+        const pct = 32 + Math.round((processed / totalChunks) * 18);
+        await onProgress?.(
+          Math.min(50, pct),
+          `Listening… skipped quiet audio (${Math.round(start / SAMPLE_RATE)}s)`,
+        );
+      }
+      continue;
+    }
 
     const timeOffset = start / SAMPLE_RATE;
     try {
-      const words = await transcribeChunk(transcriber, slice, timeOffset);
+      const { words, hint } = await transcribeChunk(
+        transcriber,
+        slice,
+        timeOffset,
+        langHint,
+      );
+      if (hint) langHint = hint;
       allWords.push(...words);
+      asrSeconds += slice.length / SAMPLE_RATE;
     } catch (err) {
       await fs.writeFile(
         path.join(dir, "transcribe-error.log"),
@@ -246,6 +319,12 @@ export async function transcribeVideo(
         { flag: "a" },
       );
     }
+
+    const pct = 32 + Math.round((processed / totalChunks) * 18);
+    await onProgress?.(
+      Math.min(50, pct),
+      `Listening… ${Math.round(timeOffset)}s / ~${Math.round(audio.length / SAMPLE_RATE)}s`,
+    );
   }
 
   allWords.sort((a, b) => a.start - b.start);
@@ -255,7 +334,17 @@ export async function transcribeVideo(
 
   await fs.writeFile(
     path.join(dir, "transcript.json"),
-    JSON.stringify({ language, segments, wordCount: allWords.length }, null, 2),
+    JSON.stringify(
+      {
+        language,
+        segments,
+        wordCount: allWords.length,
+        asrSeconds: Math.round(asrSeconds),
+        model: process.env.WHISPER_MODEL || "Xenova/whisper-tiny",
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
 

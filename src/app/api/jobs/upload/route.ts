@@ -4,13 +4,38 @@ import path from "path";
 import { parseCaptionsEnabled } from "@/lib/captions-flag";
 import { createJob, jobDir, saveJob } from "@/lib/jobs";
 import { runPipeline } from "@/lib/pipeline";
-import type { AspectRatio, LayoutMode } from "@/lib/types";
+import type {
+  AspectRatio,
+  CaptionReadMode,
+  CaptionThemeId,
+  ExportCodec,
+  ExportQuality,
+  LayoutMode,
+  WhisperQuality,
+} from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const ASPECTS: AspectRatio[] = ["9:16", "1:1", "4:5", "16:9"];
 const LAYOUTS: LayoutMode[] = ["auto", "fill", "face-top"];
+const WHISPER: WhisperQuality[] = ["fast", "balanced", "best"];
+const CAP_MODES: CaptionReadMode[] = ["verbatim", "readable", "minimal"];
+const THEMES: CaptionThemeId[] = [
+  "tiktok-clean",
+  "tiktok-bold",
+  "hormozi",
+  "podcast",
+  "gaming",
+  "minimal",
+  "cinematic",
+  "luxury",
+  "neon",
+  "youtube-shorts",
+  "instagram-reels",
+];
+const EXPORT_Q: ExportQuality[] = ["high", "very-high", "maximum"];
+const CODECS: ExportCodec[] = ["h264", "hevc", "av1", "vp9"];
 
 export async function POST(request: Request) {
   try {
@@ -23,6 +48,13 @@ export async function POST(request: Request) {
       true,
     );
     const title = String(form.get("title") || "Uploaded video").slice(0, 120);
+    const whisperRaw = String(form.get("whisperQuality") || "fast");
+    const themeRaw = String(form.get("captionTheme") || "tiktok-bold");
+    const readRaw = String(form.get("captionReadMode") || "readable");
+    const exportRaw = String(form.get("exportQuality") || "very-high");
+    const codecRaw = String(form.get("exportCodec") || "h264");
+    const preferHwEncode = String(form.get("preferHwEncode") ?? "true") !== "false";
+    const captionEmojis = String(form.get("captionEmojis") ?? "true") !== "false";
 
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Choose an MP4 file to upload." }, { status: 400 });
@@ -41,11 +73,33 @@ export async function POST(request: Request) {
     const layoutMode = LAYOUTS.includes(layoutRaw as LayoutMode)
       ? (layoutRaw as LayoutMode)
       : "auto";
+    const whisperQuality = WHISPER.includes(whisperRaw as WhisperQuality)
+      ? (whisperRaw as WhisperQuality)
+      : "fast";
+    const captionTheme = THEMES.includes(themeRaw as CaptionThemeId)
+      ? (themeRaw as CaptionThemeId)
+      : "tiktok-bold";
+    const captionReadMode = CAP_MODES.includes(readRaw as CaptionReadMode)
+      ? (readRaw as CaptionReadMode)
+      : "readable";
+    const exportQuality = EXPORT_Q.includes(exportRaw as ExportQuality)
+      ? (exportRaw as ExportQuality)
+      : "very-high";
+    const exportCodec = CODECS.includes(codecRaw as ExportCodec)
+      ? (codecRaw as ExportCodec)
+      : "h264";
 
     const job = await createJob(`upload://${file.name}`, {
       aspectRatio,
       layoutMode,
       captionsEnabled,
+      whisperQuality,
+      captionTheme,
+      captionReadMode,
+      captionEmojis: Boolean(captionEmojis),
+      exportQuality,
+      exportCodec,
+      preferHwEncode: Boolean(preferHwEncode),
     });
     job.title = title || file.name;
     await saveJob(job);

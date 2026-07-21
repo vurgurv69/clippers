@@ -94,6 +94,14 @@ export function StudioTopBar({
   return (
     <header className="studio-top cc-top">
       <div className="top-left">
+        <button
+          type="button"
+          className="btn ghost tiny cc-back"
+          onClick={onClose}
+          title="Save and return to Clippers home"
+        >
+          ← Back
+        </button>
         <div className="studio-brand cc-brand">
           Clip<em>pers</em>
         </div>
@@ -239,7 +247,7 @@ export function StudioTopBar({
                   setSettingsOpen(false);
                 }}
               >
-                Close project
+                Save &amp; back to Clippers
               </button>
             </div>
           )}

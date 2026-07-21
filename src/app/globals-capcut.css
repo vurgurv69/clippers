@@ -104,6 +104,26 @@
   gap: 12px !important;
 }
 
+.cc-shell .top-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  min-width: 0 !important;
+}
+.cc-shell .cc-back {
+  flex-shrink: 0 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 6px 10px !important;
+  color: var(--cc-text) !important;
+  border: 1px solid var(--cc-line) !important;
+  border-radius: var(--cc-r-ctl) !important;
+  background: var(--cc-panel) !important;
+}
+.cc-shell .cc-back:hover {
+  background: var(--cc-hover) !important;
+  border-color: var(--cc-line-2) !important;
+}
 .cc-shell .cc-brand {
   font-size: 14px !important;
   font-weight: 700 !important;

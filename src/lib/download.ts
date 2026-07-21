@@ -2,7 +2,12 @@ import fs from "fs/promises";
 import path from "path";
 import { ffmpegPath, ffprobePath, runCommand, ytDlpPath } from "./binaries";
 import { jobDir } from "./jobs";
-import { downloadTikTokNoWatermark } from "./tiktok-api";
+import {
+  downloadInstagramHd,
+  downloadTikTokNoWatermark,
+} from "./tiktok-api";
+import { readCachedDownload, writeCachedDownload } from "./download-cache";
+import type { DownloadHint } from "./types";
 
 export type DownloadedVideo = {
   videoPath: string;
@@ -10,9 +15,24 @@ export type DownloadedVideo = {
   duration: number;
 };
 
+export type { DownloadHint };
+
 const MEDIA_EXTS = [".mp4", ".mkv", ".webm", ".mov", ".m4a", ".m4v"];
 
-type Platform = "youtube" | "tiktok" | "other";
+type Platform =
+  | "youtube"
+  | "tiktok"
+  | "instagram"
+  | "facebook"
+  | "x"
+  | "twitch"
+  | "kick"
+  | "vimeo"
+  | "other";
+
+/** Prefer best video+audio — allow up to 4K when available, prefer 1080+. */
+const HQ_FORMAT =
+  "bv*[height<=2160]+ba/b[height<=2160]/bv*[height<=1440]+ba/bv*[height<=1080]+ba/bv*+ba/b/best";
 
 function detectPlatform(url: string): Platform {
   const host = (() => {
@@ -31,6 +51,36 @@ function detectPlatform(url: string): Platform {
     return "tiktok";
   }
   if (
+    host.includes("instagram.com") ||
+    host.includes("instagr.am") ||
+    host.includes("cdninstagram.com")
+  ) {
+    return "instagram";
+  }
+  if (
+    host.includes("facebook.com") ||
+    host.includes("fb.watch") ||
+    host.includes("fb.com")
+  ) {
+    return "facebook";
+  }
+  if (
+    host === "x.com" ||
+    host.includes("twitter.com") ||
+    host.includes("t.co")
+  ) {
+    return "x";
+  }
+  if (host.includes("twitch.tv") || host.includes("clips.twitch.tv")) {
+    return "twitch";
+  }
+  if (host.includes("kick.com")) {
+    return "kick";
+  }
+  if (host.includes("vimeo.com")) {
+    return "vimeo";
+  }
+  if (
     host.includes("youtube.com") ||
     host.includes("youtu.be") ||
     host.includes("youtube-nocookie.com")
@@ -38,6 +88,18 @@ function detectPlatform(url: string): Platform {
     return "youtube";
   }
   return "other";
+}
+
+function resolvePlatform(url: string, hint: DownloadHint = "auto"): Platform {
+  if (hint === "tiktok") return "tiktok";
+  if (hint === "instagram") return "instagram";
+  if (hint === "youtube") return "youtube";
+  if (hint === "facebook") return "facebook";
+  if (hint === "x") return "x";
+  if (hint === "twitch") return "twitch";
+  if (hint === "kick") return "kick";
+  if (hint === "vimeo") return "vimeo";
+  return detectPlatform(url);
 }
 
 async function probeDuration(videoPath: string): Promise<number> {
@@ -146,13 +208,14 @@ const COMMON_ARGS = (ff: string) => [
   "node",
   "--no-warnings",
   "--retries",
-  "8",
+  "12",
   "--fragment-retries",
-  "8",
+  "12",
   "--retry-sleep",
   "2",
   "--socket-timeout",
-  "30",
+  "45",
+  "--continue",
   "--add-header",
   "Accept-Language:en-US,en;q=0.9",
 ];
@@ -162,8 +225,8 @@ async function fetchTitle(
   ff: string,
   platform: Platform,
 ): Promise<string> {
-  // TikTok webpage via yt-dlp often TLS-resets on Windows — skip
-  if (platform === "tiktok") return "";
+  // TikTok / IG webpage via yt-dlp often TLS-resets — skip
+  if (platform === "tiktok" || platform === "instagram") return "";
   try {
     const extra =
       platform === "youtube"
@@ -249,44 +312,43 @@ function buildAttempts(
     "after_move:%(title)s|||%(filepath)s",
   ];
 
-  if (platform === "tiktok") {
-    // Skip yt-dlp for TikTok — curl TLS resets on many Windows/ISP setups.
-    // downloadVideo() goes straight to the no-watermark helper APIs.
+  if (platform === "tiktok" || platform === "instagram") {
+    // Skip yt-dlp — dedicated no-watermark / HD helpers in downloadVideo().
     return [];
   }
 
   if (platform === "youtube") {
     return [
       {
-        label: "android/ios HD",
+        label: "android/ios HQ",
         args: [
           ...base,
           "--extractor-args",
           "youtube:player_client=android,ios",
           "-f",
-          "bv*[height<=1080]+ba/b[height<=1080]/b",
+          HQ_FORMAT,
           url,
         ],
       },
       {
-        label: "tv/android HD",
+        label: "tv/android HQ",
         args: [
           ...base,
           "--extractor-args",
           "youtube:player_client=tv_embedded,android",
           "-f",
-          "bv*[height<=1080]+ba/b[height<=1080]/b",
+          HQ_FORMAT,
           url,
         ],
       },
       {
-        label: "web + mweb",
+        label: "web + mweb HQ",
         args: [
           ...base,
           "--extractor-args",
           "youtube:player_client=web,mweb",
           "-f",
-          "bv*[height<=1080]+ba/b[height<=1080]/b",
+          HQ_FORMAT,
           url,
         ],
       },
@@ -297,18 +359,18 @@ function buildAttempts(
           "--extractor-args",
           "youtube:player_client=android",
           "-f",
-          "18/22/b",
+          "22/18/b",
           url,
         ],
       },
     ];
   }
 
-  // Generic / other sites
+  // Generic / other sites — best available quality
   return [
     {
-      label: "best",
-      args: [...base, "-f", "bv*+ba/b", url],
+      label: "best HQ",
+      args: [...base, "-f", HQ_FORMAT, url],
     },
     {
       label: "impersonate chrome",
@@ -317,7 +379,7 @@ function buildAttempts(
         "--impersonate",
         "chrome-131:android-14",
         "-f",
-        "b/best",
+        "bv*+ba/b/best",
         url,
       ],
     },
@@ -327,11 +389,26 @@ function buildAttempts(
 export async function downloadVideo(
   jobId: string,
   url: string,
+  hint: DownloadHint = "auto",
 ): Promise<DownloadedVideo> {
+  // Reuse local cache when available
+  const cached = await readCachedDownload(url);
+  if (cached && cached.duration > 0) {
+    const dir = jobDir(jobId);
+    await fs.mkdir(dir, { recursive: true });
+    const finalPath = path.join(dir, "source.mp4");
+    await fs.copyFile(cached.videoPath, finalPath);
+    return {
+      videoPath: finalPath,
+      title: cached.title,
+      duration: cached.duration || (await probeDuration(finalPath)),
+    };
+  }
+
   const dir = jobDir(jobId);
   const outTemplate = path.join(dir, "source.%(ext)s").replace(/\\/g, "/");
   const ff = ffmpegPath().replace(/\\/g, "/");
-  const platform = detectPlatform(url);
+  const platform = resolvePlatform(url, hint);
 
   const titleFromInfo = await fetchTitle(url, ff, platform);
 
@@ -367,16 +444,71 @@ export async function downloadVideo(
       if (!(await probeHasVideo(finalPath))) {
         throw new Error("Downloaded file has no video track");
       }
+      const title = titleFromInfo || api.title || "TikTok video";
+      void writeCachedDownload({
+        url,
+        sourcePath: finalPath,
+        title,
+        duration,
+      });
       return {
         videoPath: finalPath,
-        title: titleFromInfo || api.title || "TikTok video",
+        title,
         duration,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `${msg}\n\nUse “Or upload MP4” under the link box — TikTok is blocked on this network.`,
+        `${msg}\n\nUse the Upload MP4 button — TikTok is blocked on this network.`,
       );
+    }
+  }
+
+  if (!downloaded && platform === "instagram") {
+    try {
+      await clearPartialDownloads(dir);
+      const finalPath = path.join(dir, "source.mp4");
+      const api = await downloadInstagramHd(url, finalPath);
+      const duration = await probeDuration(finalPath);
+      if (!(await probeHasVideo(finalPath))) {
+        throw new Error("Downloaded file has no video track");
+      }
+      const title = titleFromInfo || api.title || "Instagram video";
+      void writeCachedDownload({
+        url,
+        sourcePath: finalPath,
+        title,
+        duration,
+      });
+      return {
+        videoPath: finalPath,
+        title,
+        duration,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Last resort: yt-dlp for Instagram
+      try {
+        await clearPartialDownloads(dir);
+        await runCommand(ytDlpPath(), [
+          ...COMMON_ARGS(ff),
+          "--merge-output-format",
+          "mp4",
+          "-o",
+          outTemplate,
+          "-f",
+          HQ_FORMAT,
+          "--impersonate",
+          "chrome-131:android-14",
+          url,
+        ]);
+        downloaded = (await listMedia(dir)).length > 0;
+        if (!downloaded) throw new Error(msg);
+      } catch {
+        throw new Error(
+          `${msg}\n\nUse a public Instagram Reel/post link, or upload an MP4.`,
+        );
+      }
     }
   }
 
@@ -384,7 +516,9 @@ export async function downloadVideo(
     const tip =
       platform === "youtube"
         ? "YouTube tip: try again in a minute, or paste a different public link."
-        : "Tip: make sure the link is public — or upload an MP4.";
+        : platform === "instagram"
+          ? "Instagram tip: use a public Reel/post URL, or tap Instagram HD."
+          : "Tip: make sure the link is public — or upload an MP4.";
     throw new Error(
       `Download failed (${platform}).\n${tip}\n${errors.slice(-4).join("\n").slice(0, 900)}`,
     );
@@ -451,5 +585,12 @@ export async function downloadVideo(
     "Untitled video";
 
   const duration = await probeDuration(videoPath);
-  return { videoPath, title, duration };
+  const result = { videoPath, title, duration };
+  void writeCachedDownload({
+    url,
+    sourcePath: videoPath,
+    title,
+    duration,
+  });
+  return result;
 }

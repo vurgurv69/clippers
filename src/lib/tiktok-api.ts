@@ -2,9 +2,13 @@ import fs from "fs/promises";
 import path from "path";
 import { spawn } from "child_process";
 
+function curlBin() {
+  return process.platform === "win32" ? "curl.exe" : "curl";
+}
+
 function runCurl(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("curl.exe", args, {
+    const child = spawn(curlBin(), args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -51,7 +55,11 @@ async function curlJson(url: string, referer?: string): Promise<unknown> {
   }
 }
 
-async function curlDownloadFile(url: string, outPath: string): Promise<void> {
+async function curlDownloadFile(
+  url: string,
+  outPath: string,
+  referer: string,
+): Promise<void> {
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   const tmp = `${outPath}.part`;
   const args = [
@@ -59,11 +67,11 @@ async function curlDownloadFile(url: string, outPath: string): Promise<void> {
     "-sS",
     "-L",
     "--max-time",
-    "180",
+    "240",
     "-A",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "-H",
-    "Referer: https://www.tiktok.com/",
+    `Referer: ${referer}`,
     "-o",
     tmp,
     url,
@@ -123,6 +131,7 @@ async function resolveViaTikWm(
         last = raw.msg || `tikwm code ${raw.code}`;
         continue;
       }
+      // Prefer HD no-watermark; never use wmplay
       const videoUrl = raw.data.hdplay || raw.data.play;
       if (!videoUrl) {
         last = "No HD/play URL in response";
@@ -139,10 +148,12 @@ async function resolveViaTikWm(
   throw new Error(last);
 }
 
+/** Cobalt — TikTok + Instagram (and more) at max quality when available. */
 async function resolveViaCobalt(
-  tiktokUrl: string,
+  mediaUrl: string,
+  fallbackTitle: string,
 ): Promise<{ title: string; videoUrl: string }> {
-  const clean = normalizeTikTokUrl(tiktokUrl);
+  const clean = mediaUrl.trim();
   const hosts = [
     "https://cobalt-api.kwiatekmieniany.pl/",
     "https://api.cobalt.tools/",
@@ -157,51 +168,55 @@ async function resolveViaCobalt(
     );
     try {
       await fs.mkdir(path.dirname(tmpJson), { recursive: true });
-      const body = JSON.stringify({
-        url: clean,
-        videoQuality: "1080",
-        downloadMode: "auto",
-      });
-      const args = [
-        "-4",
-        "-sS",
-        "-L",
-        "--max-time",
-        "45",
-        "-A",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0",
-        "-H",
-        "Content-Type: application/json",
-        "-H",
-        "Accept: application/json",
-        "-d",
-        body,
-        "-o",
-        tmpJson,
-        host,
-      ];
-      const { code, stderr } = await runCurl(args);
-      if (code !== 0) {
-        last = stderr.trim() || `curl exit ${code}`;
-        continue;
+      // Prefer max / 1080 no-watermark style streams
+      for (const quality of ["max", "2160", "1440", "1080"] as const) {
+        const body = JSON.stringify({
+          url: clean,
+          videoQuality: quality,
+          downloadMode: "auto",
+          filenameStyle: "basic",
+        });
+        const args = [
+          "-4",
+          "-sS",
+          "-L",
+          "--max-time",
+          "45",
+          "-A",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0",
+          "-H",
+          "Content-Type: application/json",
+          "-H",
+          "Accept: application/json",
+          "-d",
+          body,
+          "-o",
+          tmpJson,
+          host,
+        ];
+        const { code, stderr } = await runCurl(args);
+        if (code !== 0) {
+          last = stderr.trim() || `curl exit ${code}`;
+          continue;
+        }
+        const raw = JSON.parse(await fs.readFile(tmpJson, "utf8")) as {
+          status?: string;
+          url?: string;
+          tunnel?: string;
+          filename?: string;
+          error?: { code?: string };
+          text?: string;
+        };
+        const videoUrl = raw.url || raw.tunnel;
+        if (!videoUrl) {
+          last = raw.error?.code || raw.text || `status ${raw.status}`;
+          continue;
+        }
+        return {
+          title: (raw.filename || fallbackTitle).replace(/\.[^.]+$/, ""),
+          videoUrl,
+        };
       }
-      const raw = JSON.parse(await fs.readFile(tmpJson, "utf8")) as {
-        status?: string;
-        url?: string;
-        tunnel?: string;
-        filename?: string;
-        error?: { code?: string };
-        text?: string;
-      };
-      const videoUrl = raw.url || raw.tunnel;
-      if (!videoUrl) {
-        last = raw.error?.code || raw.text || `status ${raw.status}`;
-        continue;
-      }
-      return {
-        title: (raw.filename || "TikTok video").replace(/\.[^.]+$/, ""),
-        videoUrl,
-      };
     } catch (err) {
       last = err instanceof Error ? err.message : String(err);
     } finally {
@@ -211,32 +226,43 @@ async function resolveViaCobalt(
   throw new Error(last);
 }
 
+async function ensureCurl() {
+  try {
+    await runCurl(["--version"]);
+  } catch {
+    throw new Error(
+      process.platform === "win32"
+        ? "Windows curl.exe not found. Update Windows or upload an MP4 instead."
+        : "curl not found. Install curl or upload an MP4 instead.",
+    );
+  }
+}
+
 /**
- * Clippers fetches HD TikTok for you via helper sites (you stay on this site).
- * Prefers no-watermark streams. Uses Windows curl.exe for reliable TLS.
+ * HD TikTok without watermark (helper APIs — you stay on Clippers).
  */
 export async function downloadTikTokNoWatermark(
   tiktokUrl: string,
   outPath: string,
 ): Promise<{ title: string }> {
-  try {
-    await runCurl(["--version"]);
-  } catch {
-    throw new Error(
-      "Windows curl.exe not found. Update Windows or upload an MP4 instead.",
-    );
-  }
+  await ensureCurl();
 
   const errors: string[] = [];
-  const resolvers = [
-    { name: "tikwm", fn: resolveViaTikWm },
-    { name: "cobalt", fn: resolveViaCobalt },
+  const resolvers: Array<{
+    name: string;
+    fn: () => Promise<{ title: string; videoUrl: string }>;
+  }> = [
+    { name: "tikwm", fn: () => resolveViaTikWm(tiktokUrl) },
+    {
+      name: "cobalt",
+      fn: () => resolveViaCobalt(tiktokUrl, "TikTok video"),
+    },
   ];
 
   for (const { name, fn } of resolvers) {
     try {
-      const { title, videoUrl } = await fn(tiktokUrl);
-      await curlDownloadFile(videoUrl, outPath);
+      const { title, videoUrl } = await fn();
+      await curlDownloadFile(videoUrl, outPath, "https://www.tiktok.com/");
       return { title: title || "TikTok video" };
     } catch (err) {
       errors.push(
@@ -249,6 +275,30 @@ export async function downloadTikTokNoWatermark(
   }
 
   throw new Error(
-    `Could not pull TikTok HD automatically (${errors.join(" | ")}).`,
+    `Could not pull TikTok HD (no watermark) automatically (${errors.join(" | ")}).`,
   );
+}
+
+/**
+ * Instagram Reels / posts via Cobalt (no watermark when the source allows).
+ */
+export async function downloadInstagramHd(
+  instagramUrl: string,
+  outPath: string,
+): Promise<{ title: string }> {
+  await ensureCurl();
+
+  try {
+    const { title, videoUrl } = await resolveViaCobalt(
+      instagramUrl,
+      "Instagram video",
+    );
+    await curlDownloadFile(videoUrl, outPath, "https://www.instagram.com/");
+    return { title: title || "Instagram video" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not pull Instagram HD automatically (${msg}). Use a public Reel/post link, or upload an MP4.`,
+    );
+  }
 }

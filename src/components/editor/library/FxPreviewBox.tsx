@@ -37,7 +37,6 @@ export function TransitionPreview({ kind }: { kind: string }) {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img className="cc-fx-photo b" src={PHOTO_B} alt="" draggable={false} />
       <span className="cc-fx-flash" />
-      <span className="cc-fx-label">{kind}</span>
     </span>
   );
 }

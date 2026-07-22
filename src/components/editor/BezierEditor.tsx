@@ -2,11 +2,8 @@
 
 import { useCallback, useRef } from "react";
 import type { BezierHandles } from "@/lib/editor-types";
+import { clamp } from "@/lib/edit-tools";
 import { StudioSlider as Slider } from "@/components/editor/StudioSlider";
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
-}
 
 /**
  * Interactive cubic-bezier editor: drag the two control points on the SVG,

@@ -14,10 +14,8 @@ import {
   type TimelineMarker,
 } from "@/lib/editor-types";
 import type { ToolId } from "@/lib/edit-tools";
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
-}
+import { clamp } from "@/lib/edit-tools";
+import { rafPointerMove } from "@/hooks/useRafPointer";
 
 function IconBtn({
   on,
@@ -185,6 +183,8 @@ export type TimelineCtx = {
   rippleMagneticWhileDrag?: (clipId: string, start: number) => void;
   /** Slip source window keeping duration. */
   slipClip: (clipId: string, deltaTimeline: number) => void;
+  /** Slide tool — move clip in time (packed main uses magnetic pack). */
+  slideClip: (clipId: string, newStart: number) => void;
   /** Trim left/right with optional ripple / roll behavior from active tool. */
   trimClipEdge: (
     clipId: string,
@@ -208,6 +208,8 @@ export type TimelineCtx = {
   /** Playback + preview toggles (moved from preview monitor). */
   playing?: boolean;
   muted?: boolean;
+  masterVolume?: number;
+  onMasterVolume?: (v: number) => void;
   useProxy?: boolean;
   guidesThirds?: boolean;
   onTogglePlay?: () => void;
@@ -216,6 +218,8 @@ export type TimelineCtx = {
   onToggleGuides?: () => void;
   onDeleteSelection?: () => void;
   canDeleteSelection?: boolean;
+  /** White bubble between two main clips — apply / preview transition. */
+  onTransitionJunction?: (outgoingClipId: string) => void;
 };
 
 export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
@@ -276,6 +280,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
     endMagneticDrag,
     rippleMagneticWhileDrag,
     slipClip,
+    slideClip,
     trimClipEdge,
     music,
     musicAsset,
@@ -292,14 +297,17 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
     onEnterCompound,
     playing = false,
     muted = false,
+    masterVolume = 1,
     useProxy = true,
     guidesThirds = false,
     onTogglePlay,
     onToggleMute,
+    onMasterVolume,
     onToggleProxy,
     onToggleGuides,
     onDeleteSelection,
     canDeleteSelection = false,
+    onTransitionJunction,
   } = ctx;
 
   const [focusLane, setFocusLane] = useState<"video" | "music" | "text" | null>(
@@ -331,13 +339,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
     e.stopPropagation();
     e.preventDefault();
     scrubToClientX(e.clientX, true);
-    const move = (ev: PointerEvent) => scrubToClientX(ev.clientX, true);
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    rafPointerMove((ev) => scrubToClientX(ev.clientX, true));
   };
 
   const trimMode = (): "normal" | "ripple" | "roll" => {
@@ -385,7 +387,19 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
       dragHandle(e.clientX, (d) => slipClip(c.id, d));
       return;
     }
-    if (tool === "slide" || lane > 0) {
+    if (tool === "slide") {
+      const base = c.tlStart ?? starts[i] ?? 0;
+      if (lane === 0 && !freeV1) beginMagneticDrag?.(c.id);
+      dragHandle(
+        e.clientX,
+        (d) => slideClip(c.id, snapSec(base + d)),
+        () => {
+          if (lane === 0 && !freeV1) endMagneticDrag?.(c.id);
+        },
+      );
+      return;
+    }
+    if (lane > 0) {
       const base = c.tlStart ?? starts[i] ?? 0;
       dragHandle(e.clientX, (d) => {
         patchClip(c.id, { tlStart: snapSec(base + d) });
@@ -485,12 +499,12 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                       </svg>
                     </IconBtn>
                     <IconBtn
-                      on={muted}
+                      on={muted || masterVolume <= 0.001}
                       onClick={() => onToggleMute?.()}
                       title="Mute (M)"
                       label={muted ? "Mute" : "Sound"}
                     >
-                      {muted ? (
+                      {muted || masterVolume <= 0.001 ? (
                         <svg viewBox="0 0 16 16" width="14" height="14">
                           <path d="M2.5 6.2h2.2L8 3.5v9L4.7 9.8H2.5V6.2z" fill="currentColor" />
                           <path d="m10.2 6.2 3.3 3.3M13.5 6.2l-3.3 3.3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -503,6 +517,23 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         </svg>
                       )}
                     </IconBtn>
+                    <label className="tl-volume" title="Master volume">
+                      <span className="sr-only">Volume</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={muted ? 0 : masterVolume}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          onMasterVolume?.(v);
+                          if (v > 0.001 && muted) onToggleMute?.();
+                        }}
+                        aria-label="Master volume"
+                      />
+                      <em>{Math.round((muted ? 0 : masterVolume) * 100)}</em>
+                    </label>
                     <IconBtn
                       onClick={() => splitAtPlayhead()}
                       title="Split at playhead (S)"
@@ -657,11 +688,14 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                       </div>
                     )}
       
-                    {/* V1 MAIN video track */}
+                    {/* ═══ 1 · VIDEO timeline ═══ */}
                     <div
-                      className={`lane-wrap${focusLane === "video" ? " focused" : ""}`}
+                      className={`lane-wrap tl-lane tl-video${focusLane === "video" ? " focused" : ""}`}
                       onPointerDownCapture={() => setFocusLane("video")}
                     >
+                    <div className="tl-lane-label" aria-hidden>
+                      Video
+                    </div>
                     <TrackHeader
                       track={tracks.video}
                       onPatch={(p) => patchTrack("video", p)}
@@ -808,15 +842,50 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           </div>
                         );
                       })}
+                      {/* White bubbles at cuts between main clips */}
+                      {(() => {
+                        const mains = clips
+                          .map((c, i) => ({ c, i, s: starts[i] ?? 0 }))
+                          .filter(
+                            (r) =>
+                              clipLane(r.c) === 0 &&
+                              !r.c.adjustment &&
+                              !(r.c.multicamId && !r.c.multicamActive),
+                          )
+                          .sort((a, b) => a.s - b.s || a.i - b.i);
+                        return mains.slice(0, -1).map((a) => {
+                          const boundary = a.s + clipLength(a.c);
+                          const left = boundary * pxPerSec;
+                          if (!clipInView(left - 12, 24)) return null;
+                          const has = a.c.transition !== "none";
+                          return (
+                            <button
+                              key={`tr-j-${a.c.id}`}
+                              type="button"
+                              className={has ? "tr-junction on" : "tr-junction"}
+                              style={{ left }}
+                              title={
+                                has
+                                  ? `${a.c.transition} — click to preview / change`
+                                  : "Add transition between clips"
+                              }
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                onTransitionJunction?.(a.c.id);
+                              }}
+                            >
+                              <span aria-hidden>{has ? "✦" : "+"}</span>
+                            </button>
+                          );
+                        });
+                      })()}
                     </div>
                     )}
-                    </div>
-      
-                    {/* V2 OVERLAY track (lane 1) */}
                     <TrackHeader
-                      track={tracks.overlay}
+                      track={{ ...tracks.overlay, name: "Overlay" }}
                       onPatch={(p) => patchTrack("overlay", p)}
-                      count={clips.filter((c) => clipLane(c) === 1).length}
+                      count={clips.filter((c) => clipLane(c) >= 1).length}
                     />
                     {!tracks.overlay.hidden && (
                     <div
@@ -824,7 +893,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                       style={{ height: tracks.overlay.collapsed ? 12 : tracks.overlay.height, opacity: tracks.overlay.muted ? 0.55 : 1 }}
                     >
                       {clips.map((c, i) => {
-                        if (clipLane(c) !== 1) return null;
+                        if (clipLane(c) < 1) return null;
                         const asset = assetById.get(c.assetId);
                         const len = clipLength(c);
                         const left = starts[i] * pxPerSec;
@@ -839,7 +908,6 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                             />
                           );
                         }
-                        const maxOut = asset?.kind === "image" ? 30 : asset?.duration ?? c.outPoint;
                         const isOn = selectedIds.includes(c.id);
                         return (
                           <div
@@ -852,7 +920,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                               setCtxMenu({ x: e.clientX, y: e.clientY, clipId: c.id });
                             }}
                             onPointerDown={(e) =>
-                              onClipBodyDown(e, c, i, tracks.overlay.locked, "V2 track is locked", 1)
+                              onClipBodyDown(e, c, i, tracks.overlay.locked, "Overlay track is locked", Math.max(1, clipLane(c)))
                             }
                           >
                             {asset && (asset.kind === "video" || asset.kind === "image") && (
@@ -863,7 +931,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                               onPointerDown={(e) => onEdgeDown(e, c, "left")}
                             />
                             <span className="clip-label">
-                              {c.adjustment ? "▨ ADJ" : `▣ ${asset?.name?.slice(0, 12) || "V2"}`}
+                              {c.adjustment ? "▨ ADJ" : `▣ ${asset?.name?.slice(0, 12) || "Overlay"}`}
                             </span>
                             <span
                               className="clip-handle right"
@@ -872,83 +940,21 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           </div>
                         );
                       })}
-                      {clips.every((c) => clipLane(c) !== 1) && (
-                        <span className="lane-empty">Move a clip here → V2 Overlay</span>
+                      {clips.every((c) => clipLane(c) < 1) && (
+                        <span className="lane-empty">Cutaways & B-roll land here</span>
                       )}
                     </div>
                     )}
-
-                    {/* V3 OVERLAY track (lane ≥ 2) */}
-                    <TrackHeader
-                      track={tracks.overlay2}
-                      onPatch={(p) => patchTrack("overlay2", p)}
-                      count={clips.filter((c) => clipLane(c) >= 2).length}
-                    />
-                    {!tracks.overlay2.hidden && (
-                    <div
-                      className="track track-clips overlay-lane"
-                      style={{ height: tracks.overlay2.collapsed ? 12 : tracks.overlay2.height, opacity: tracks.overlay2.muted ? 0.55 : 1 }}
-                    >
-                      {clips.map((c, i) => {
-                        if (clipLane(c) < 2) return null;
-                        const asset = assetById.get(c.assetId);
-                        const len = clipLength(c);
-                        const left = starts[i] * pxPerSec;
-                        const width = len * pxPerSec;
-                        if (!clipInView(left, width)) {
-                          return (
-                            <div
-                              key={c.id}
-                              className="clip-block overlay ghost"
-                              style={{ left, width, borderColor: tracks.overlay2.color }}
-                              aria-hidden
-                            />
-                          );
-                        }
-                        const maxOut = asset?.kind === "image" ? 30 : asset?.duration ?? c.outPoint;
-                        const isOn = selectedIds.includes(c.id);
-                        return (
-                          <div
-                            key={c.id}
-                            className={`clip-block overlay${isOn ? " on" : ""}${c.adjustment ? " adjustment" : ""}`}
-                            style={{ left, width, borderColor: tracks.overlay2.color }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              selectClip(c.id, e);
-                              setCtxMenu({ x: e.clientX, y: e.clientY, clipId: c.id });
-                            }}
-                            onPointerDown={(e) =>
-                              onClipBodyDown(e, c, i, tracks.overlay2.locked, "V3 track is locked", 2)
-                            }
-                          >
-                            {asset && (asset.kind === "video" || asset.kind === "image") && (
-                              <ClipStrip asset={asset} clip={c} width={width} url={thumbUrl} />
-                            )}
-                            <span
-                              className="clip-handle left"
-                              onPointerDown={(e) => onEdgeDown(e, c, "left")}
-                            />
-                            <span className="clip-label">
-                              {c.adjustment ? "▨ ADJ" : `▣ ${asset?.name?.slice(0, 12) || "V3"}`}
-                            </span>
-                            <span
-                              className="clip-handle right"
-                              onPointerDown={(e) => onEdgeDown(e, c, "right")}
-                            />
-                          </div>
-                        );
-                      })}
-                      {clips.every((c) => clipLane(c) < 2) && (
-                        <span className="lane-empty">Move a clip here → V3 Overlay</span>
-                      )}
                     </div>
-                    )}
       
-                    {/* AUDIO track */}
+                    {/* ═══ 2 · AUDIO timeline ═══ */}
                     <div
-                      className={`lane-wrap${focusLane === "music" ? " focused" : ""}`}
+                      className={`lane-wrap tl-lane tl-audio${focusLane === "music" ? " focused" : ""}`}
                       onPointerDownCapture={() => setFocusLane("music")}
                     >
+                    <div className="tl-lane-label" aria-hidden>
+                      Audio
+                    </div>
                     <TrackHeader
                       track={tracks.music}
                       onPatch={(p) => patchTrack("music", p)}
@@ -1080,11 +1086,14 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                     )}
                     </div>
       
-                    {/* TEXT track */}
+                    {/* ═══ 3 · TEXT timeline ═══ */}
                     <div
-                      className={`lane-wrap${focusLane === "text" ? " focused" : ""}`}
+                      className={`lane-wrap tl-lane tl-text${focusLane === "text" ? " focused" : ""}`}
                       onPointerDownCapture={() => setFocusLane("text")}
                     >
+                    <div className="tl-lane-label" aria-hidden>
+                      Text
+                    </div>
                     <TrackHeader
                       track={tracks.text}
                       onPatch={(p) => patchTrack("text", p)}

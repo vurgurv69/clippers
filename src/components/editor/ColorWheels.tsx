@@ -13,7 +13,7 @@ type WheelProps = {
  * Lift / Gamma / Gain pad — full 2D drag inside the circle.
  * Vertical = strength (− down / + up). Horizontal also contributes so you can steer freely.
  */
-export function ColorWheel({ label, value, onChange, hue = "#1f9d7a" }: WheelProps) {
+function ColorWheel({ label, value, onChange, hue = "#1f9d7a" }: WheelProps) {
   const padRef = useRef<HTMLButtonElement>(null);
   const dragging = useRef(false);
   /** Visual offset from center (−1..1); Y is inverted so up = positive. */

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { assetsDir, getProject } from "@/lib/editor-project";
 
@@ -39,7 +40,10 @@ export async function GET(request: Request, { params }: Params) {
   }
 
   const safe = path.basename(name);
-  const asset = project.assets.find((a) => a.filename === safe);
+  // Match original filename OR proxy filename (preview uses proxy_*.mp4).
+  const asset = project.assets.find(
+    (a) => a.filename === safe || a.proxyFile === safe,
+  );
   if (!asset) {
     return NextResponse.json({ error: "Asset not found" }, { status: 404 });
   }
@@ -52,18 +56,15 @@ export async function GET(request: Request, { params }: Params) {
   const stat = fs.statSync(filePath);
   const type = TYPES[path.extname(safe).toLowerCase()] || "application/octet-stream";
 
-  // Support HTTP range requests so <video> can seek smoothly. We read only the
-  // requested slice into a Buffer (a valid BodyInit) rather than streaming a
-  // Node Readable, which the route response layer may not accept.
   const rangeHeader = request.headers.get("range");
   if (rangeHeader) {
     const match = /bytes=(\d+)-(\d*)/.exec(rangeHeader);
     if (match) {
       const start = Number(match[1]);
-      const end = match[2] ? Number(match[2]) : stat.size - 1;
+      const end = match[2] ? Number(match[2]) : Math.min(stat.size - 1, start + 1024 * 1024 - 1);
+      const chunkSize = end - start + 1;
       const fd = fs.openSync(filePath, "r");
       try {
-        const chunkSize = end - start + 1;
         const buf = Buffer.alloc(chunkSize);
         fs.readSync(fd, buf, 0, chunkSize, start);
         return new NextResponse(buf, {
@@ -82,8 +83,10 @@ export async function GET(request: Request, { params }: Params) {
     }
   }
 
-  const buffer = fs.readFileSync(filePath);
-  return new NextResponse(buffer, {
+  // Stream full file (no giant Buffer) so large OneDrive-backed clips can start.
+  const nodeStream = fs.createReadStream(filePath);
+  const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+  return new NextResponse(webStream, {
     headers: {
       "Content-Type": type,
       "Content-Length": String(stat.size),

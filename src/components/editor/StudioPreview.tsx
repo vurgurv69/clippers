@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useState, type MutableRefObject, type ReactNode, type Ref } from "react";
+import { forwardRef, useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode, type Ref } from "react";
 import type { MusicTrack, ProjectAsset, TextOverlay, TimelineClip } from "@/lib/editor-types";
 import { TextLayer } from "@/components/editor/TextLayer";
 import { WebGLFxPreview } from "@/components/editor/WebGLFxPreview";
@@ -9,6 +9,86 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (!ref) return;
   if (typeof ref === "function") ref(value);
   else (ref as { current: T | null }).current = value;
+}
+
+/**
+ * Incoming clip during a transition — keeps decoding/playing with the playhead
+ * instead of freezing on a #t= poster frame.
+ */
+function TransitionIncomingVideo({
+  src,
+  sourceTime,
+  playing,
+  speed = 1,
+  style,
+  className,
+}: {
+  src: string;
+  sourceTime: number;
+  playing: boolean;
+  speed?: number;
+  style: CSSProperties;
+  className?: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const lastSeek = useRef(0);
+
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    if (v.dataset.src !== src) {
+      v.dataset.src = src;
+      v.src = src;
+      v.load();
+    }
+  }, [src]);
+
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    const target = Math.max(0, sourceTime);
+    const rate = Math.max(0.25, Math.min(4, speed || 1));
+    const apply = () => {
+      v.playbackRate = rate;
+      const drift = Math.abs(v.currentTime - target);
+      // While playing, only correct big drift so both clips keep motion.
+      const needSeek = playing ? drift > 0.28 : drift > 0.04;
+      if (needSeek && performance.now() - lastSeek.current > 40) {
+        lastSeek.current = performance.now();
+        try {
+          v.currentTime = target;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (playing) {
+        if (v.paused) void v.play().catch(() => {});
+      } else if (!v.paused) {
+        v.pause();
+      }
+    };
+    if (v.readyState >= 2) apply();
+    else {
+      const onReady = () => {
+        apply();
+        v.removeEventListener("loadeddata", onReady);
+      };
+      v.addEventListener("loadeddata", onReady);
+      return () => v.removeEventListener("loadeddata", onReady);
+    }
+  }, [sourceTime, playing, speed]);
+
+  return (
+    <video
+      ref={ref}
+      className={className}
+      muted
+      playsInline
+      preload="auto"
+      style={style}
+      aria-hidden
+    />
+  );
 }
 
 export type PreviewGuides = { thirds: boolean; center: boolean; safe: boolean };
@@ -46,6 +126,9 @@ type Props = {
   current: number;
   visibleTexts: TextOverlay[];
   selectedTextId: string | null;
+  projectId?: string;
+  onSelectText?: (id: string) => void;
+  onPatchText?: (id: string, patch: Partial<TextOverlay>) => void;
   guides: PreviewGuides;
   setGuides: (fn: (g: PreviewGuides) => PreviewGuides) => void;
   hasClips: boolean;
@@ -116,6 +199,9 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
     current,
     visibleTexts,
     selectedTextId,
+    projectId,
+    onSelectText,
+    onPatchText,
     guides,
     setGuides,
     hasClips,
@@ -149,6 +235,9 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
   ref,
 ) {
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [mediaBusy, setMediaBusy] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const triedFullRef = useRef(false);
     // Kept for parent API / future frame jog; transport uses Back/Play/Stop/Forward.
     void onStepFrame;
     void rate;
@@ -158,6 +247,40 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
     void onSetRate;
     void onSetDir;
     void onToggleLoop;
+
+  useEffect(() => {
+    setMediaError(null);
+    triedFullRef.current = false;
+  }, [activeAsset?.id]);
+
+  // Loading / seeking spinner so scrubbing never feels "stuck"
+  useEffect(() => {
+    const v = videoEl;
+    if (!v || activeAsset?.kind !== "video") {
+      setMediaBusy(false);
+      return;
+    }
+    const onBusy = () => setMediaBusy(true);
+    const onReady = () => {
+      setMediaBusy(false);
+      setMediaError(null);
+    };
+    v.addEventListener("loadstart", onBusy);
+    v.addEventListener("waiting", onBusy);
+    v.addEventListener("seeking", onBusy);
+    v.addEventListener("canplay", onReady);
+    v.addEventListener("playing", onReady);
+    v.addEventListener("seeked", onReady);
+    if (v.readyState >= 3) setMediaBusy(false);
+    return () => {
+      v.removeEventListener("loadstart", onBusy);
+      v.removeEventListener("waiting", onBusy);
+      v.removeEventListener("seeking", onBusy);
+      v.removeEventListener("canplay", onReady);
+      v.removeEventListener("playing", onReady);
+      v.removeEventListener("seeked", onReady);
+    };
+  }, [videoEl, activeAsset?.id, activeAsset?.kind]);
 
   const wantsGl =
     glFx &&
@@ -170,20 +293,54 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
           Boolean(activeClip.color.lut)),
     );
 
-  const mediaStyle = {
-    filter: wantsGl ? "none" : colorFilter(activeClip, activeLocalT),
-    transform: previewTransform(activeClip, activeLocalT),
-    opacity: wantsGl
-      ? 0
-      : previewOpacity(activeClip, activeLocalT) *
-        (transitionBlend &&
-        (transitionBlend.kind === "crossfade" ||
-          transitionBlend.kind === "dissolve" ||
-          transitionBlend.kind === "fadeblack" ||
-          transitionBlend.kind === "fadewhite")
-          ? 1 - transitionBlend.u
-          : 1),
-  };
+  const mediaStyle = (() => {
+    const baseT = previewTransform(activeClip, activeLocalT);
+    const baseO = previewOpacity(activeClip, activeLocalT);
+    if (!transitionBlend) {
+      return {
+        filter: wantsGl ? "none" : colorFilter(activeClip, activeLocalT),
+        transform: baseT,
+        opacity: wantsGl ? 0 : baseO,
+      };
+    }
+    const u = transitionBlend.u;
+    const kind = transitionBlend.kind;
+    let transform = baseT || "";
+    let opacity = baseO;
+    // Motion transitions: keep both clips live and moving with the playhead.
+    if (kind === "slide" || kind === "push" || kind === "whip") {
+      transform = `${transform} translateX(${-u * 100}%)`.trim();
+    } else if (kind === "slideright" || kind === "pull") {
+      transform = `${transform} translateX(${u * 100}%)`.trim();
+    } else if (kind === "slideup") {
+      transform = `${transform} translateY(${-u * 100}%)`.trim();
+    } else if (kind === "slidedown") {
+      transform = `${transform} translateY(${u * 100}%)`.trim();
+    } else if (kind === "zoom" || kind === "zoomout") {
+      const s = kind === "zoom" ? 1 + u * 0.35 : 1 - u * 0.25;
+      transform = `${transform} scale(${s})`.trim();
+      opacity = baseO * (1 - u * 0.55);
+    } else if (kind === "flash") {
+      opacity = baseO * (1 - Math.sin(u * Math.PI) * 0.35);
+    } else if (
+      kind === "wipeleft" ||
+      kind === "wiperight" ||
+      kind === "wipeup" ||
+      kind === "wipedown" ||
+      kind === "iris" ||
+      kind === "circlewipe" ||
+      kind === "clockwipe"
+    ) {
+      opacity = baseO; // wipe reveals incoming on top
+    } else {
+      opacity = baseO * (1 - u * 0.92);
+    }
+    return {
+      filter: wantsGl ? "none" : colorFilter(activeClip, activeLocalT),
+      transform,
+      opacity: wantsGl ? 0 : opacity,
+    };
+  })();
 
   const blendIncomingStyle = (() => {
     if (!transitionBlend?.toAsset) return null;
@@ -207,28 +364,85 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
         transform: `${base.transform || ""} translateX(${(1 - u) * 100}%)`,
       };
     }
-    if (kind === "zoom") {
-      return {
-        ...base,
-        opacity: base.opacity * u,
-        transform: `${base.transform || ""} scale(${0.85 + 0.15 * u})`,
-      };
-    }
-    if (kind === "wipeup" || kind === "wipedown") {
-      const wipe =
-        kind === "wipeup"
-          ? `inset(${(1 - u) * 100}% 0 0 0)`
-          : `inset(0 0 ${(1 - u) * 100}% 0)`;
-      return { ...base, opacity: base.opacity, clipPath: wipe };
-    }
-    if (kind === "circlewipe") {
+    if (kind === "slideright" || kind === "pull") {
       return {
         ...base,
         opacity: base.opacity,
-        clipPath: `circle(${u * 75}% at 50% 50%)`,
+        transform: `${base.transform || ""} translateX(${(u - 1) * 100}%)`,
       };
     }
-    // default soft dissolve for everything else
+    if (kind === "slideup") {
+      return {
+        ...base,
+        opacity: base.opacity,
+        transform: `${base.transform || ""} translateY(${(1 - u) * 100}%)`,
+      };
+    }
+    if (kind === "slidedown") {
+      return {
+        ...base,
+        opacity: base.opacity,
+        transform: `${base.transform || ""} translateY(${(u - 1) * 100}%)`,
+      };
+    }
+    if (kind === "zoom" || kind === "morph") {
+      return {
+        ...base,
+        opacity: base.opacity * Math.min(1, u * 1.15),
+        transform: `${base.transform || ""} scale(${0.82 + 0.18 * u})`,
+      };
+    }
+    if (kind === "zoomout") {
+      return {
+        ...base,
+        opacity: base.opacity * Math.min(1, u * 1.2),
+        transform: `${base.transform || ""} scale(${1.25 - 0.25 * u})`,
+      };
+    }
+    if (kind === "wipeup" || kind === "wipedown" || kind === "wipeleft" || kind === "wiperight") {
+      const wipe =
+        kind === "wipeup"
+          ? `inset(${(1 - u) * 100}% 0 0 0)`
+          : kind === "wipedown"
+            ? `inset(0 0 ${(1 - u) * 100}% 0)`
+            : kind === "wipeleft"
+              ? `inset(0 0 0 ${(1 - u) * 100}%)`
+              : `inset(0 ${(1 - u) * 100}% 0 0)`;
+      return { ...base, opacity: base.opacity, clipPath: wipe };
+    }
+    if (kind === "circlewipe" || kind === "clockwipe" || kind === "iris") {
+      return {
+        ...base,
+        opacity: base.opacity,
+        clipPath: `circle(${u * 78}% at 50% 50%)`,
+      };
+    }
+    if (kind === "spin" || kind === "cube" || kind === "flip") {
+      return {
+        ...base,
+        opacity: base.opacity * Math.min(1, u * 1.2),
+        transform: `${base.transform || ""} rotate(${(1 - u) * (kind === "flip" ? 90 : 18)}deg) scale(${0.9 + 0.1 * u})`,
+      };
+    }
+    if (kind === "blur" || kind === "liquid" || kind === "warp") {
+      return {
+        ...base,
+        opacity: base.opacity * u,
+        filter: `${base.filter === "none" ? "" : base.filter + " "}blur(${(1 - u) * 10}px)`.trim(),
+      };
+    }
+    if (kind === "glitch" || kind === "shake") {
+      const jx = (1 - u) * (Math.sin(u * 40) * 12);
+      return {
+        ...base,
+        opacity: base.opacity * Math.min(1, 0.4 + u),
+        transform: `${base.transform || ""} translate(${jx}px, 0)`,
+      };
+    }
+    if (kind === "flash" || kind === "filmburn") {
+      return { ...base, opacity: base.opacity * Math.max(0, (u - 0.35) * 1.6) };
+    }
+    // Soft dissolve for everything else (still visible)
     return { ...base, opacity: base.opacity * u };
   })();
 
@@ -274,12 +488,48 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
               const el = e.currentTarget;
               if (!activeAsset || activeAsset.kind !== "video") return;
               const full = assetUrl(activeAsset, { full: true });
-              if (el.src && !el.src.includes(encodeURIComponent(activeAsset.filename))) {
+              const alreadyFull =
+                triedFullRef.current ||
+                (el.src && el.src.includes(encodeURIComponent(activeAsset.filename)));
+              if (!alreadyFull) {
+                triedFullRef.current = true;
                 el.src = full;
                 el.load();
+                return;
               }
+              setMediaBusy(false);
+              setMediaError("Couldn't load this clip");
             }}
           />
+          {mediaBusy && !mediaError && activeAsset?.kind === "video" && (
+            <div className="preview-loading" aria-live="polite" aria-busy="true">
+              <span className="preview-loading-spinner" aria-hidden />
+              <span className="preview-loading-label">Loading</span>
+            </div>
+          )}
+          {mediaError && (
+            <div className="preview-error" role="alert">
+              <p className="preview-error-title">{mediaError}</p>
+              <p className="preview-error-hint">
+                File may be missing, corrupt, or still uploading.
+              </p>
+              <button
+                type="button"
+                className="btn tiny preview-error-retry"
+                onClick={() => {
+                  const v = videoEl;
+                  if (!v || !activeAsset || activeAsset.kind !== "video") return;
+                  setMediaError(null);
+                  triedFullRef.current = false;
+                  setMediaBusy(true);
+                  v.src = assetUrl(activeAsset);
+                  v.load();
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {wantsGl && (
             <WebGLFxPreview
               video={videoEl}
@@ -331,16 +581,16 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
                 aria-hidden
               />
             ) : (
-              <video
+              <TransitionIncomingVideo
                 className="preview-transition-in"
-                src={`${assetUrl(transitionBlend.toAsset)}#t=${(
+                src={assetUrl(transitionBlend.toAsset)}
+                sourceTime={
                   transitionBlend.to.inPoint +
                   transitionBlend.toLocal * (transitionBlend.to.speed || 1)
-                ).toFixed(2)}`}
-                muted
-                playsInline
+                }
+                playing={playing}
+                speed={transitionBlend.to.speed || 1}
                 style={blendIncomingStyle}
-                aria-hidden
               />
             )
           )}
@@ -451,7 +701,15 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
           })}
 
         {visibleTexts.map((t) => (
-          <TextLayer key={t.id} t={t} current={current} selected={t.id === selectedTextId} />
+          <TextLayer
+            key={t.id}
+            t={t}
+            current={current}
+            selected={t.id === selectedTextId}
+            projectId={projectId}
+            onSelect={onSelectText}
+            onPatch={onPatchText}
+          />
         ))}
 
         {guides.thirds && (
@@ -475,12 +733,27 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
             <div className="empty-illustration" aria-hidden>
               <span className="empty-film" />
             </div>
-            <p className="empty-title">Your preview</p>
+            <p className="empty-title">Nothing on the timeline</p>
             <p className="empty-hint">
               {hasMedia
-                ? "Click a clip in Media to add it to the timeline"
-                : "Import media from the left panel to get started"}
+                ? "Drop a clip from Media onto the timeline — preview appears here"
+                : "Import video or photos in the Media panel to start editing"}
             </p>
+            {onImportMedia && !hasMedia && (
+              <label className="btn primary empty-import">
+                Import media
+                <input
+                  type="file"
+                  accept="video/*,image/*,audio/*"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    if (e.target.files?.length) onImportMedia(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            )}
           </div>
         )}
       </div>

@@ -94,5 +94,3 @@ export function StudioToolbar({
     </div>
   );
 }
-
-export type { ToolId };

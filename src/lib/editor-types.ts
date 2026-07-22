@@ -58,21 +58,37 @@ export type TransitionKind =
   | "stretch"
   | "wipeup"
   | "wipedown"
+  | "wipeleft"
+  | "wiperight"
+  | "slideup"
+  | "slidedown"
+  | "slideright"
+  | "zoomout"
+  | "iris"
   | "dissolve";
 
 /** UI metadata for the transition picker (label + optional favorite grouping). */
 export const TRANSITION_DEFS: { id: TransitionKind; label: string }[] = [
   { id: "none", label: "Cut" },
-  { id: "crossfade", label: "Crossfade" },
+  { id: "crossfade", label: "Cross Dissolve" },
   { id: "dissolve", label: "Dissolve" },
-  { id: "fadeblack", label: "Dip Black" },
-  { id: "fadewhite", label: "Fade White" },
+  { id: "fadeblack", label: "Dip to Black" },
+  { id: "fadewhite", label: "Dip to White" },
   { id: "flash", label: "Flash" },
-  { id: "zoom", label: "Zoom" },
-  { id: "slide", label: "Slide" },
+  { id: "zoom", label: "Zoom In" },
+  { id: "zoomout", label: "Zoom Out" },
+  { id: "slide", label: "Slide Left" },
+  { id: "slideright", label: "Slide Right" },
+  { id: "slideup", label: "Slide Up" },
+  { id: "slidedown", label: "Slide Down" },
   { id: "push", label: "Push" },
   { id: "pull", label: "Pull" },
-  { id: "whip", label: "Whip" },
+  { id: "whip", label: "Whip Pan" },
+  { id: "wipeleft", label: "Wipe Left" },
+  { id: "wiperight", label: "Wipe Right" },
+  { id: "wipeup", label: "Wipe Up" },
+  { id: "wipedown", label: "Wipe Down" },
+  { id: "iris", label: "Iris" },
   { id: "blur", label: "Blur" },
   { id: "spin", label: "Spin" },
   { id: "warp", label: "Warp" },
@@ -87,8 +103,6 @@ export const TRANSITION_DEFS: { id: TransitionKind; label: string }[] = [
   { id: "cube", label: "Cube" },
   { id: "flip", label: "Flip" },
   { id: "stretch", label: "Stretch" },
-  { id: "wipeup", label: "Wipe Up" },
-  { id: "wipedown", label: "Wipe Down" },
 ];
 
 export type ColorGrade = {
@@ -614,11 +628,11 @@ export type TrackChrome = {
 };
 
 export const DEFAULT_TRACKS: Record<TrackId, TrackChrome> = {
-  video: { name: "Video", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#6b7280" },
-  overlay: { name: "V2 Overlay", locked: false, muted: false, solo: false, hidden: false, height: 44, color: "#52525b" },
-  overlay2: { name: "V3 Overlay", locked: false, muted: false, solo: false, hidden: false, height: 44, color: "#3f3f46" },
-  music: { name: "Audio", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#71717a" },
-  text: { name: "Text", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#a1a1aa" },
+  video: { name: "Video", locked: false, muted: false, solo: false, hidden: false, height: 64, color: "#059669" },
+  overlay: { name: "Overlay", locked: false, muted: false, solo: false, hidden: false, height: 48, color: "#0d9488" },
+  overlay2: { name: "Overlay 2", locked: false, muted: false, solo: false, hidden: true, height: 44, color: "#3f3f46" },
+  music: { name: "Audio", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#64748b" },
+  text: { name: "Text", locked: false, muted: false, solo: false, hidden: false, height: 48, color: "#a16207" },
 };
 
 export type ProjectSpec = {
@@ -864,7 +878,7 @@ export function defaultText(id: string, start: number): TextOverlay {
     color: "#ffffff",
     align: "center",
     bold: true,
-    anim: "fade",
+    anim: "none",
     font: "Arial Black",
     stroke: 3,
     strokeColor: "#000000",

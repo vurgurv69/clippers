@@ -59,6 +59,34 @@
   gap: 0 !important;
 }
 
+/* Bright — light emerald mixed with white */
+.studio-shell.cc-shell.light {
+  --cc-bg: #eef8f3;
+  --cc-elev: #ffffff;
+  --cc-panel: #f7fcf9;
+  --cc-raised: #e6f5ee;
+  --cc-hover: #d8f0e4;
+  --cc-line: rgba(6, 95, 70, 0.1);
+  --cc-line-2: rgba(6, 95, 70, 0.18);
+  --cc-text: #0b3d2e;
+  --cc-dim: #3d6b58;
+  --cc-faint: #5f8a78;
+  --cc-em: #059669;
+  --cc-em-dim: rgba(5, 150, 105, 0.14);
+  --cc-danger: #dc2626;
+  --timeline: #e3f4ec !important;
+  --em: #059669 !important;
+  --em-deep: #047857 !important;
+  --em-ink: #ffffff !important;
+  --em-soft: rgba(5, 150, 105, 0.12) !important;
+  --preview-void: #d9efe5 !important;
+  --sel: #10b981 !important;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(16, 185, 129, 0.14), transparent 55%),
+    radial-gradient(90% 70% at 100% 0%, rgba(255, 255, 255, 0.9), transparent 50%),
+    var(--cc-bg) !important;
+}
+
 .studio-overlay:has(.cc-shell) {
   padding: 0 !important;
   background: #000 !important;
@@ -66,6 +94,96 @@
   display: flex !important;
   align-items: stretch !important;
   justify-content: stretch !important;
+}
+.studio-overlay:has(.cc-shell.light) {
+  background: #e8f6ef !important;
+}
+
+/* Bright mode — kill leftover black surfaces */
+.cc-shell.light .bin-rail-btn,
+.cc-shell.light .insp-rail-btn {
+  background: #6ee7b7 !important;
+  color: #064e3b !important;
+  border-color: rgba(6, 95, 70, 0.18) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35) !important;
+}
+.cc-shell.light .bin-rail-btn:hover,
+.cc-shell.light .insp-rail-btn:hover {
+  background: #34d399 !important;
+  color: #022c22 !important;
+}
+.cc-shell.light .cc-card-thumb,
+.cc-shell.light .monitor-stage,
+.cc-shell.light .preview-void,
+.cc-shell.light .viewer-stage,
+.cc-shell.light .program-monitor,
+.cc-shell.light .studio-preview,
+.cc-shell.light .studio-preview.cc-phone,
+.cc-shell.light .studio-preview.cc-phone.portrait,
+.cc-shell.light .studio-preview.cc-phone.landscape,
+.cc-shell.light .preview-frame,
+.cc-shell.light .studio-stage.cc-stage,
+.cc-shell.light .preview-program video,
+.cc-shell.light .preview-program .preview-image,
+.cc-shell.light .preview-program canvas,
+.cc-shell.light .bin-item img,
+.cc-shell.light .bin-item video {
+  background: var(--preview-void) !important;
+}
+.cc-shell.light .studio-stage.cc-stage {
+  background:
+    radial-gradient(80% 70% at 50% 40%, rgba(255, 255, 255, 0.65), transparent 70%),
+    #e8f6ef !important;
+}
+.cc-shell.light .studio-preview.cc-phone,
+.cc-shell.light .studio-preview.cc-phone.portrait,
+.cc-shell.light .studio-preview.cc-phone.landscape {
+  border-color: rgba(6, 95, 70, 0.2) !important;
+  box-shadow: 0 14px 36px rgba(6, 95, 70, 0.12) !important;
+}
+.cc-shell.light .preview-empty.pro-empty {
+  background: #dff3ea !important;
+}
+.cc-shell.light .cc-fs-corner {
+  background: rgba(255, 255, 255, 0.85) !important;
+  color: #0b3d2e !important;
+  border-color: rgba(6, 95, 70, 0.18) !important;
+}
+.cc-shell.light .cc-fs-corner:hover {
+  background: #ffffff !important;
+}
+.cc-shell.light .studio-timeline,
+.cc-shell.light .studio-timeline.pro-timeline {
+  background: #f2faf6 !important;
+}
+.cc-shell.light .timeline-bar,
+.cc-shell.light .ruler {
+  background: #e6f5ee !important;
+  border-color: rgba(6, 95, 70, 0.12) !important;
+}
+.cc-shell.light .tick {
+  color: #5f8a78 !important;
+}
+.cc-shell.light .tick::before {
+  background: #86c5ad !important;
+}
+.cc-shell.light .tick-minor {
+  background: #b7dfd0 !important;
+}
+.cc-shell.light .btn.cc-top-btn {
+  background: #ffffff !important;
+  border-color: rgba(6, 95, 70, 0.16) !important;
+  color: #0b3d2e !important;
+}
+.cc-shell.light .btn.cc-top-btn:hover,
+.cc-shell.light .btn.cc-top-btn.on {
+  background: #e6f5ee !important;
+  border-color: rgba(5, 150, 105, 0.35) !important;
+}
+.cc-shell.light .tl-speed-pop button.on {
+  background: rgba(5, 150, 105, 0.16) !important;
+  color: #064e3b !important;
+  border-color: rgba(5, 150, 105, 0.28) !important;
 }
 
 .studio-shell.cc-shell {
@@ -102,6 +220,9 @@
   background: var(--cc-elev) !important;
   border-bottom: 1px solid var(--cc-line) !important;
   gap: 12px !important;
+  position: relative !important;
+  z-index: 120 !important;
+  overflow: visible !important;
 }
 
 .cc-shell .top-left {
@@ -191,13 +312,43 @@
   background: var(--cc-hover) !important;
   border-color: rgba(255, 255, 255, 0.22) !important;
 }
+.cc-shell .cc-theme-btn {
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  border: none !important;
+  background: #ffffff !important;
+  color: #0a0b0d !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+  transition: transform 0.16s ease, filter 0.16s ease, background 0.16s ease !important;
+  cursor: pointer !important;
+}
+.cc-shell .cc-theme-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+  display: block !important;
+}
+.cc-shell .cc-theme-btn:hover {
+  filter: brightness(0.97);
+  transform: translateY(-0.5px) scale(1.04) !important;
+}
+.cc-shell.light .cc-theme-btn {
+  background: #059669 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.35) !important;
+}
 .cc-shell .cc-export,
 .cc-shell .btn.primary.cc-export {
   min-width: 96px !important;
   height: 34px !important;
   padding: 0 18px !important;
   border-radius: 9px !important;
-  background: #e8eaed !important;
+  background: #ffffff !important;
   color: #0a0b0d !important;
   font-size: 12.5px !important;
   font-weight: 700 !important;
@@ -205,9 +356,15 @@
   border: none !important;
   box-shadow: none !important;
   transition: filter 0.16s ease, transform 0.16s ease !important;
+  cursor: pointer !important;
+}
+.cc-shell.light .cc-export,
+.cc-shell.light .btn.primary.cc-export {
+  background: #059669 !important;
+  color: #ffffff !important;
 }
 .cc-shell .cc-export:hover:not(:disabled) {
-  filter: brightness(1.05);
+  filter: brightness(0.96);
   transform: translateY(-0.5px) !important;
 }
 .cc-shell .cc-export:disabled {
@@ -215,11 +372,26 @@
 }
 
 .cc-shell .settings-menu.cc-menu,
-.cc-shell .cc-menu {
-  background: var(--cc-panel) !important;
-  border: 1px solid var(--cc-line-2) !important;
+.cc-shell .cc-menu,
+.settings-menu.cc-menu.cc-settings-panel {
+  background: var(--cc-panel, #15181d) !important;
+  border: 1px solid var(--cc-line-2, rgba(255, 255, 255, 0.12)) !important;
   border-radius: 10px !important;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55) !important;
+}
+/* Portaled settings — sits above inspector / body (shell clips absolute menus) */
+.settings-menu.cc-menu.cc-settings-panel {
+  position: fixed !important;
+  z-index: 10000 !important;
+  min-width: 268px !important;
+  max-width: 308px !important;
+  max-height: min(72vh, 520px) !important;
+  overflow: auto !important;
+  padding: 12px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  color: var(--cc-text, #eef1f5) !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -379,10 +551,10 @@
   margin: 0 !important;
   padding: 0 !important;
   border: none !important;
-  border-left: 1px solid rgba(125, 211, 252, 0.55) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.12) !important;
   border-radius: 0 !important;
-  background: #7dd3fc !important;
-  color: #0c1929 !important;
+  background: #4b5563 !important;
+  color: #e5e7eb !important;
   font-size: 18px !important;
   font-weight: 800 !important;
   line-height: 1 !important;
@@ -390,11 +562,11 @@
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2) !important;
 }
 .cc-shell .bin-rail-btn:hover {
-  background: #bae6fd !important;
-  color: #0c1929 !important;
+  background: #6b7280 !important;
+  color: #f9fafb !important;
 }
 .cc-shell .studio-sidebar.collapsed .bin-rail-btn {
   width: 100% !important;
@@ -837,10 +1009,16 @@
 .cc-shell .preview-empty.pro-empty {
   background: #000 !important;
 }
-/* Hide duplicate Import in preview — Media panel owns Import */
+/* Hide duplicate Import when Media already has assets — Media panel owns Import */
 .cc-shell .preview-empty .empty-import,
 .cc-shell .preview-empty label.btn.primary {
   display: none !important;
+}
+/* Cold start: allow Import CTA in empty preview when library is empty */
+.cc-shell .preview-empty:has(.empty-import) .empty-import {
+  display: inline-flex !important;
+  margin-top: 10px;
+  pointer-events: auto !important;
 }
 .cc-shell .preview-empty .empty-hint {
   color: var(--cc-faint) !important;
@@ -882,10 +1060,10 @@
   margin: 0 !important;
   padding: 0 !important;
   border: none !important;
-  border-right: 1px solid rgba(125, 211, 252, 0.55) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
   border-radius: 0 !important;
-  background: #7dd3fc !important;
-  color: #0c1929 !important;
+  background: #4b5563 !important;
+  color: #e5e7eb !important;
   font-size: 18px !important;
   font-weight: 800 !important;
   line-height: 1 !important;
@@ -893,11 +1071,11 @@
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2) !important;
 }
 .cc-shell .insp-rail-btn:hover {
-  color: #0c1929 !important;
-  background: #bae6fd !important;
+  color: #f9fafb !important;
+  background: #6b7280 !important;
 }
 .cc-shell .studio-inspector.collapsed .insp-rail-btn {
   flex: 1 !important;
@@ -981,17 +1159,29 @@
 .cc-shell .studio-timeline {
   flex: 0 0 auto !important;
   margin: 0 !important;
-  max-height: 28vh !important;
-  min-height: 180px !important;
+  max-height: 42vh !important;
+  min-height: 240px !important;
+  height: auto !important;
   border: none !important;
   border-top: 1px solid var(--cc-line) !important;
   border-radius: 0 !important;
   background: var(--cc-panel) !important;
   box-shadow: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
 }
 .cc-shell .studio-timeline.expanded {
-  max-height: 34vh !important;
-  min-height: 220px !important;
+  max-height: 58vh !important;
+  min-height: 320px !important;
+}
+.cc-shell .timeline-scroll {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  padding: 0 10px 14px !important;
+  overscroll-behavior: contain !important;
 }
 .cc-shell .timeline-bar {
   display: flex !important;
@@ -1008,6 +1198,50 @@
   gap: 6px !important;
   flex-wrap: wrap !important;
   min-width: 0 !important;
+}
+.cc-shell .tl-volume {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin-left: 2px !important;
+  padding: 0 6px !important;
+  height: 28px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--cc-line) !important;
+  background: var(--cc-elev) !important;
+}
+.cc-shell .tl-volume input[type="range"] {
+  width: 88px !important;
+  height: 4px !important;
+  accent-color: #9aa3b2 !important;
+  cursor: pointer !important;
+}
+.cc-shell .tl-volume em {
+  font-style: normal !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  font-variant-numeric: tabular-nums !important;
+  color: var(--cc-dim) !important;
+  min-width: 2ch !important;
+  text-align: right !important;
+}
+.cc-shell.light .tl-volume {
+  background: #ffffff !important;
+  border-color: rgba(6, 95, 70, 0.16) !important;
+}
+.cc-shell.light .tl-volume input[type="range"] {
+  accent-color: #059669 !important;
+}
+.cc-shell .sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 .cc-shell .btn.tl-play {
   width: 28px !important;
@@ -1260,14 +1494,48 @@
 .cc-shell .tick-minor {
   background: #3a404c !important;
 }
-.cc-shell .lane-wrap {
-  margin-top: 4px !important;
-  border-radius: 8px !important;
-  border: 1px solid transparent !important;
-  transition:
-    background 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease !important;
+.cc-shell .lane-wrap.tl-lane {
+  margin: 10px 0 6px !important;
+  padding: 6px 6px 8px !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+}
+.cc-shell .tl-lane-label {
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  color: var(--cc-faint, #8b93a3) !important;
+  padding: 2px 4px 6px !important;
+}
+.cc-shell .tl-lane.tl-video {
+  border-color: rgba(5, 150, 105, 0.28) !important;
+  background: rgba(5, 150, 105, 0.05) !important;
+}
+.cc-shell .tl-lane.tl-audio {
+  border-color: rgba(100, 116, 139, 0.35) !important;
+  background: rgba(100, 116, 139, 0.06) !important;
+}
+.cc-shell .tl-lane.tl-text {
+  border-color: rgba(161, 98, 7, 0.3) !important;
+  background: rgba(161, 98, 7, 0.06) !important;
+}
+.cc-shell.light .lane-wrap.tl-lane {
+  border-color: rgba(6, 95, 70, 0.14) !important;
+  background: rgba(255, 255, 255, 0.55) !important;
+}
+.cc-shell.light .tl-lane.tl-video {
+  border-color: rgba(5, 150, 105, 0.28) !important;
+  background: rgba(236, 253, 245, 0.9) !important;
+}
+.cc-shell.light .tl-lane.tl-audio {
+  border-color: rgba(100, 116, 139, 0.25) !important;
+  background: rgba(248, 250, 252, 0.95) !important;
+}
+.cc-shell.light .tl-lane.tl-text {
+  border-color: rgba(161, 98, 7, 0.25) !important;
+  background: rgba(255, 251, 235, 0.9) !important;
 }
 .cc-shell .lane-wrap.focused {
   background: rgba(255, 255, 255, 0.035) !important;
@@ -1616,18 +1884,7 @@
 .cc-fx-box.cc-tr-photo .cc-fx-photo.b { z-index: 2; }
 .cc-fx-box.cc-tr-photo .cc-fx-flash { z-index: 3; }
 .cc-fx-box.cc-tr-photo .cc-fx-label {
-  position: absolute;
-  left: 4px;
-  bottom: 3px;
-  z-index: 4;
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: #fff;
-  text-shadow: 0 1px 2px #000;
-  opacity: 0.85;
-  pointer-events: none;
+  display: none !important;
 }
 
 .cc-trk-none .cc-fx-photo.b { opacity: 0; }
@@ -2834,6 +3091,9 @@
   grid-template-columns: 1fr 1fr;
   gap: 0.45rem;
 }
+.cc-shell-grid.clean {
+  gap: 8px;
+}
 .cc-shell-card {
   display: flex;
   flex-direction: column;
@@ -2846,8 +3106,25 @@
   text-align: left;
   cursor: pointer;
 }
+.cc-shell-card.clean {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 44px;
+  padding: 10px 8px;
+  background: var(--cc-elev, #151c24);
+  border: 1px solid var(--cc-line, rgba(255, 255, 255, 0.1));
+}
+.cc-shell-card.clean strong {
+  font-size: 12px;
+  font-weight: 600;
+}
 .cc-shell-card:hover {
   border-color: rgba(18, 214, 160, 0.4);
+}
+.cc-shell-card.clean:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: var(--cc-raised, #1a222c);
 }
 .cc-shell-card span {
   font-size: 1.25rem;
@@ -2860,6 +3137,231 @@
   font-size: 0.65rem;
   color: #8b93a3;
   font-style: normal;
+}
+.cc-shell .cc-action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.cc-shell .cc-action-stack.tight {
+  gap: 6px;
+}
+.cc-shell .cc-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--cc-line, rgba(255, 255, 255, 0.12));
+  background: var(--cc-elev, #151c24);
+  color: var(--cc-text, #eef1f6);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+.cc-shell .cc-action-btn:hover:not(:disabled) {
+  background: var(--cc-raised, #1a222c);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.cc-shell .cc-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cc-shell .cc-action-btn.primary {
+  background: #e8eaed;
+  color: #0a0b0d;
+  border-color: transparent;
+}
+.cc-shell .cc-action-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+  background: #e8eaed;
+}
+.cc-shell .cc-action-btn.grow {
+  flex: 1;
+  justify-content: space-between;
+  text-align: left;
+}
+.cc-shell .cc-action-btn.grow span {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--cc-faint, #8b93a3);
+}
+.cc-shell .cc-action-btn.compact {
+  width: auto;
+  min-width: 52px;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+}
+.cc-shell .cc-cleanup-line {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.cc-shell .cc-duration {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 4px 4px;
+  border-top: 1px solid var(--cc-line, rgba(255, 255, 255, 0.08));
+  margin-top: 8px;
+}
+.cc-shell .cc-duration-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--cc-dim, #9aa3b2);
+}
+.cc-shell .cc-duration-head em {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--cc-text, #eef1f6);
+}
+.cc-shell .cc-duration-head em small {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--cc-faint, #8b93a3);
+}
+.cc-shell .cc-duration-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+.cc-shell .cc-dur-chip {
+  min-height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--cc-line, rgba(255, 255, 255, 0.1));
+  background: var(--cc-elev, #151c24);
+  color: var(--cc-dim, #9aa3b2);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cc-shell .cc-dur-chip.on,
+.cc-shell .cc-dur-chip:hover {
+  color: var(--cc-text, #eef1f6);
+  border-color: rgba(255, 255, 255, 0.24);
+  background: var(--cc-raised, #1a222c);
+}
+.cc-shell .cc-duration input[type="range"] {
+  width: 100%;
+  height: 4px;
+  accent-color: #9aa3b2;
+}
+.cc-shell .cc-settings-panel {
+  min-width: 268px !important;
+  max-width: 308px !important;
+  padding: 12px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+.cc-shell .cc-settings-panel .settings-heading,
+.settings-menu.cc-settings-panel .settings-heading {
+  margin: 12px 0 4px !important;
+  padding: 0 2px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  color: var(--cc-faint, #8b93a3) !important;
+}
+.cc-shell .cc-settings-panel .settings-heading:first-child,
+.settings-menu.cc-settings-panel .settings-heading:first-child {
+  margin-top: 0 !important;
+}
+.cc-shell .cc-set-row,
+.settings-menu.cc-settings-panel .cc-set-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  min-height: 32px !important;
+  padding: 2px 2px !important;
+  font-size: 12px !important;
+  color: var(--cc-dim, #9aa3b2) !important;
+}
+.cc-shell .cc-set-toggle,
+.settings-menu.cc-settings-panel .cc-set-toggle {
+  min-width: 88px !important;
+  height: 26px !important;
+  padding: 0 10px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--cc-line, rgba(255, 255, 255, 0.1)) !important;
+  background: var(--cc-elev, #111317) !important;
+  color: var(--cc-text, #eef1f5) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+}
+.cc-shell .cc-set-toggle.on,
+.settings-menu.cc-settings-panel .cc-set-toggle.on {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  background: var(--cc-raised, #1c2027) !important;
+}
+.cc-shell .cc-set-link,
+.settings-menu.cc-settings-panel .cc-set-link {
+  width: 100% !important;
+  text-align: left !important;
+  padding: 8px 8px !important;
+  border: none !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: var(--cc-text, #eef1f5) !important;
+  font-size: 12px !important;
+  cursor: pointer !important;
+}
+.cc-shell .cc-set-link:hover,
+.settings-menu.cc-settings-panel .cc-set-link:hover {
+  background: var(--cc-hover, #252a33) !important;
+}
+.cc-shell .cc-set-link.danger,
+.settings-menu.cc-settings-panel .cc-set-link.danger {
+  color: #fca5a5 !important;
+  margin-top: 4px !important;
+}
+.settings-menu.cc-settings-panel[data-theme="dark"] {
+  --cc-panel: #15181d;
+  --cc-elev: #111317;
+  --cc-raised: #1c2027;
+  --cc-hover: #252a33;
+  --cc-line: rgba(255, 255, 255, 0.07);
+  --cc-line-2: rgba(255, 255, 255, 0.12);
+  --cc-text: #eef1f5;
+  --cc-dim: #9aa3b2;
+  --cc-faint: #6b7382;
+  background: #15181d !important;
+  color: #eef1f5 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+.settings-menu.cc-settings-panel[data-theme="light"] {
+  --cc-panel: #f7fcf9;
+  --cc-elev: #ffffff;
+  --cc-raised: #e6f5ee;
+  --cc-hover: #d8f0e4;
+  --cc-line: rgba(6, 95, 70, 0.1);
+  --cc-line-2: rgba(6, 95, 70, 0.18);
+  --cc-text: #0b3d2e;
+  --cc-dim: #3d6b58;
+  --cc-faint: #5f8a78;
+  background: #ffffff !important;
+  color: #0b3d2e !important;
+  border-color: rgba(6, 95, 70, 0.18) !important;
+  box-shadow: 0 16px 48px rgba(6, 95, 70, 0.14) !important;
+}
+.settings-menu.cc-settings-panel[data-theme="light"] .cc-set-link.danger {
+  color: #dc2626 !important;
 }
 @media (max-width: 720px) {
   .cc-cal-grid {
@@ -4020,4 +4522,141 @@
 }
 .cc-shell .fx-photo-card.on {
   border-color: var(--cc-em) !important;
+}
+
+/* -- Studio polish: a11y, motion, inspector actions -- */
+@media (prefers-reduced-motion: reduce) {
+  .cc-shell *,
+  .cc-shell *::before,
+  .cc-shell *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.cc-shell :focus-visible {
+  outline: 2px solid var(--cc-em, #10b981);
+  outline-offset: 2px;
+}
+
+.cc-shell .inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  border-bottom: 1px solid var(--cc-line, rgba(255,255,255,0.08));
+  margin-bottom: 6px;
+}
+
+.cc-shell .timeline-scroll {
+  scroll-behavior: auto;
+  overscroll-behavior-x: contain;
+  contain: layout paint;
+}
+
+.cc-shell .clip-block {
+  contain: layout style;
+  will-change: transform;
+}
+
+.cc-shell .clip-block.ghost {
+  opacity: 0.22;
+  pointer-events: none;
+  background: var(--cc-raised, #1a1a1a);
+  border-style: dashed;
+}
+
+.cc-shell .playhead {
+  will-change: left;
+}
+
+.cc-shell .preview-program {
+  contain: layout paint;
+}
+
+.cc-shell .insp-tab:focus-visible,
+.cc-shell .btn:focus-visible,
+.cc-shell .cc-card:focus-visible {
+  outline: 2px solid var(--cc-em, #10b981);
+  outline-offset: 2px;
+}
+
+/* Preview media loading / seeking */
+.cc-shell .preview-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.cc-shell .preview-loading-spinner {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #34d399;
+  animation: preview-spin 0.7s linear infinite;
+}
+.cc-shell .preview-loading-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+}
+@keyframes preview-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-shell .preview-loading-spinner {
+    animation: none;
+    border-top-color: rgba(255, 255, 255, 0.7);
+  }
+}
+
+/* Preview decode / missing-file error */
+.cc-shell .preview-error {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.72);
+  text-align: center;
+  pointer-events: auto;
+}
+.cc-shell .preview-error-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+.cc-shell .preview-error-hint {
+  margin: 0 0 6px;
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(248, 250, 252, 0.65);
+}
+.cc-shell .preview-error-retry {
+  pointer-events: auto;
+}
+
+.cc-shell .preview-empty .empty-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(248, 250, 252, 0.92);
+}
+.cc-shell .preview-empty .empty-hint {
+  max-width: 240px;
+  line-height: 1.45;
 }

@@ -1,15 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { AspectRatio } from "@/lib/types";
-import { ASPECT_PRESETS } from "@/lib/types";
+import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { createPortal } from "react-dom";
 
 export type WorkspaceId = "editing" | "color" | "audio" | "deliver";
 
 type Props = {
   projectName?: string;
-  aspect: AspectRatio;
-  setAspect: Dispatch<SetStateAction<AspectRatio>>;
   darkTheme: boolean;
   setDarkTheme: Dispatch<SetStateAction<boolean>>;
   canUndo: boolean;
@@ -27,31 +24,24 @@ type Props = {
   floatInspector?: boolean;
   onToggleFloatBin?: () => void;
   onToggleFloatInspector?: () => void;
-  onAddMarker?: () => void;
-  onAddAdjustment?: () => void;
   nestDepth?: number;
   onExitCompound?: () => void;
   useProxy?: boolean;
   onToggleProxy?: () => void;
-  workspace?: WorkspaceId;
-  onWorkspace?: (w: WorkspaceId) => void;
   onOpenCommands?: () => void;
   uiLarge?: boolean;
   onToggleUiLarge?: () => void;
+  snapEnabled?: boolean;
+  onToggleSnap?: () => void;
+  magnetic?: boolean;
+  onToggleMagnetic?: () => void;
+  rippleEnabled?: boolean;
+  onToggleRipple?: () => void;
 };
 
-const WORKSPACES: { id: WorkspaceId; label: string }[] = [
-  { id: "editing", label: "Editing" },
-  { id: "color", label: "Color" },
-  { id: "audio", label: "Audio" },
-  { id: "deliver", label: "Deliver" },
-];
-
-/** CapCut-simple header: Logo · Project · Undo/Redo · Settings · Export */
+/** CapCut-simple header: Logo · Project · Undo/Redo · Theme · Settings · Export */
 export function StudioTopBar({
   projectName = "Untitled",
-  aspect,
-  setAspect,
   darkTheme,
   setDarkTheme,
   canUndo,
@@ -69,29 +59,206 @@ export function StudioTopBar({
   floatInspector,
   onToggleFloatBin,
   onToggleFloatInspector,
-  onAddMarker,
-  onAddAdjustment,
   nestDepth = 0,
   onExitCompound,
   useProxy = true,
   onToggleProxy,
-  workspace = "editing",
-  onWorkspace,
   onOpenCommands,
   uiLarge,
   onToggleUiLarge,
+  snapEnabled = true,
+  onToggleSnap,
+  magnetic = false,
+  onToggleMagnetic,
+  rippleEnabled = false,
+  onToggleRipple,
 }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+
+  useLayoutEffect(() => {
+    if (!settingsOpen || !settingsBtnRef.current) {
+      setMenuPos(null);
+      return;
+    }
+    const place = () => {
+      const r = settingsBtnRef.current!.getBoundingClientRect();
+      setMenuPos({
+        top: Math.round(r.bottom + 8),
+        right: Math.round(window.innerWidth - r.right),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
     const onDoc = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setSettingsOpen(false);
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t)) return;
+      if (settingsBtnRef.current?.contains(t)) return;
+      setSettingsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSettingsOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [settingsOpen]);
+
+  const settingsMenu =
+    settingsOpen &&
+    menuPos &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        ref={menuRef}
+        className="settings-menu cc-menu cc-settings-panel"
+        role="menu"
+        data-theme={darkTheme ? "dark" : "light"}
+        style={{ top: menuPos.top, right: menuPos.right }}
+      >
+        <p className="settings-heading">Appearance</p>
+        {onToggleUiLarge && (
+          <label className="cc-set-row">
+            <span>UI size</span>
+            <button type="button" className="cc-set-toggle" onClick={onToggleUiLarge}>
+              {uiLarge ? "Large" : "Compact"}
+            </button>
+          </label>
+        )}
+
+        <p className="settings-heading">Playback</p>
+        {onToggleProxy && (
+          <label className="cc-set-row">
+            <span>Preview quality</span>
+            <button type="button" className="cc-set-toggle" onClick={onToggleProxy}>
+              {useProxy ? "Proxy (faster)" : "Full"}
+            </button>
+          </label>
+        )}
+
+        <p className="settings-heading">Timeline</p>
+        {onToggleSnap && (
+          <label className="cc-set-row">
+            <span>Snap to edges</span>
+            <button
+              type="button"
+              className={snapEnabled ? "cc-set-toggle on" : "cc-set-toggle"}
+              onClick={onToggleSnap}
+            >
+              {snapEnabled ? "On" : "Off"}
+            </button>
+          </label>
+        )}
+        {onToggleMagnetic && (
+          <label className="cc-set-row">
+            <span>Magnet drag</span>
+            <button
+              type="button"
+              className={magnetic ? "cc-set-toggle on" : "cc-set-toggle"}
+              onClick={onToggleMagnetic}
+            >
+              {magnetic ? "On" : "Off"}
+            </button>
+          </label>
+        )}
+        {onToggleRipple && (
+          <label className="cc-set-row">
+            <span>Ripple edit</span>
+            <button
+              type="button"
+              className={rippleEnabled ? "cc-set-toggle on" : "cc-set-toggle"}
+              onClick={onToggleRipple}
+            >
+              {rippleEnabled ? "On" : "Off"}
+            </button>
+          </label>
+        )}
+
+        <p className="settings-heading">Layout</p>
+        {onToggleFloatBin && (
+          <label className="cc-set-row">
+            <span>Media panel</span>
+            <button type="button" className="cc-set-toggle" onClick={onToggleFloatBin}>
+              {floatBin ? "Floating" : "Docked"}
+            </button>
+          </label>
+        )}
+        {onToggleFloatInspector && (
+          <label className="cc-set-row">
+            <span>Inspector</span>
+            <button type="button" className="cc-set-toggle" onClick={onToggleFloatInspector}>
+              {floatInspector ? "Floating" : "Docked"}
+            </button>
+          </label>
+        )}
+
+        <p className="settings-heading">Help</p>
+        {onOpenCommands && (
+          <button
+            type="button"
+            role="menuitem"
+            className="cc-set-link"
+            onClick={() => {
+              onOpenCommands();
+              setSettingsOpen(false);
+            }}
+          >
+            Command palette
+          </button>
+        )}
+        <button
+          type="button"
+          role="menuitem"
+          className="cc-set-link"
+          onClick={() => {
+            onOpenKeymap();
+            setSettingsOpen(false);
+          }}
+        >
+          Keyboard shortcuts
+        </button>
+        {onOpenManual && (
+          <button
+            type="button"
+            role="menuitem"
+            className="cc-set-link"
+            onClick={() => {
+              onOpenManual();
+              setSettingsOpen(false);
+            }}
+          >
+            Studio manual
+          </button>
+        )}
+
+        <button
+          type="button"
+          role="menuitem"
+          className="cc-set-link danger"
+          onClick={() => {
+            onClose();
+            setSettingsOpen(false);
+          }}
+        >
+          Save & leave studio
+        </button>
+      </div>,
+      document.body,
+    );
 
   return (
     <header className="studio-top cc-top">
@@ -127,8 +294,36 @@ export function StudioTopBar({
         </button>
       </div>
 
-      <div className="top-right" ref={menuRef}>
+      <div className="top-right">
         <div className="top-actions">
+          <button
+            type="button"
+            className="btn cc-theme-btn"
+            onClick={() => setDarkTheme((d) => !d)}
+            title={darkTheme ? "Switch to bright mode" : "Switch to dark mode"}
+            aria-label={darkTheme ? "Switch to bright mode" : "Switch to dark mode"}
+            aria-pressed={!darkTheme}
+          >
+            {darkTheme ? (
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+                <circle cx="12" cy="12" r="4" fill="currentColor" />
+                <path
+                  d="M12 2v2.2M12 19.8V22M4.2 12H2M22 12h-2.2M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M20.2 14.2A8.2 8.2 0 0 1 9.8 3.8 8.4 8.4 0 1 0 20.2 14.2Z"
+                  fill="currentColor"
+                />
+              </svg>
+            )}
+          </button>
+
           {onOpenManual && (
             <button
               type="button"
@@ -136,23 +331,13 @@ export function StudioTopBar({
               onClick={onOpenManual}
               title="Studio manual"
             >
-              <span className="cc-manual-ico" aria-hidden>
-                <svg viewBox="0 0 16 16" width="13" height="13">
-                  <path
-                    d="M2.5 3.2h4.2c.9 0 1.7.4 2.3 1 .6-.6 1.4-1 2.3-1h4.2v9.1h-4.4c-.8 0-1.5.3-2.1.8-.6-.5-1.3-.8-2.1-.8H2.5V3.2z"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.3"
-                    strokeLinejoin="round"
-                  />
-                  <path d="M8 4.4v7.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
-              </span>
               Manual
             </button>
           )}
+
           <div className="settings-wrap">
             <button
+              ref={settingsBtnRef}
               type="button"
               className={settingsOpen ? "btn cc-top-btn on" : "btn cc-top-btn"}
               onClick={() => setSettingsOpen((v) => !v)}
@@ -161,121 +346,7 @@ export function StudioTopBar({
             >
               Settings
             </button>
-            {settingsOpen && (
-              <div className="settings-menu cc-menu" role="menu">
-                <p className="settings-heading">Aspect</p>
-                <div className="settings-chips">
-                  {(Object.keys(ASPECT_PRESETS) as AspectRatio[]).map((k) => (
-                    <button
-                      key={k}
-                      type="button"
-                      className={aspect === k ? "chip on" : "chip"}
-                      onClick={() => setAspect(k)}
-                    >
-                      {k}
-                    </button>
-                  ))}
-                </div>
-                {onWorkspace && (
-                  <>
-                    <p className="settings-heading">Workspace</p>
-                    <div className="settings-chips">
-                      {WORKSPACES.map((w) => (
-                        <button
-                          key={w.id}
-                          type="button"
-                          className={workspace === w.id ? "chip on" : "chip"}
-                          onClick={() => onWorkspace(w.id)}
-                        >
-                          {w.label}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-                <p className="settings-heading">Options</p>
-                <button type="button" role="menuitem" onClick={() => setDarkTheme((d) => !d)}>
-                  Theme: {darkTheme ? "Dark" : "Light"}
-                </button>
-                {onToggleProxy && (
-                  <button type="button" role="menuitem" onClick={onToggleProxy}>
-                    Preview: {useProxy ? "Proxy" : "Full"}
-                  </button>
-                )}
-                {onToggleUiLarge && (
-                  <button type="button" role="menuitem" onClick={onToggleUiLarge}>
-                    UI: {uiLarge ? "Large" : "Compact"}
-                  </button>
-                )}
-                {onToggleFloatBin && (
-                  <button type="button" role="menuitem" onClick={onToggleFloatBin}>
-                    {floatBin ? "Dock media" : "Float media"}
-                  </button>
-                )}
-                {onToggleFloatInspector && (
-                  <button type="button" role="menuitem" onClick={onToggleFloatInspector}>
-                    {floatInspector ? "Dock inspector" : "Float inspector"}
-                  </button>
-                )}
-                {onOpenCommands && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onOpenCommands();
-                      setSettingsOpen(false);
-                    }}
-                  >
-                    Commands
-                  </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onOpenKeymap();
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Shortcuts
-                </button>
-                {onAddMarker && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onAddMarker();
-                      setSettingsOpen(false);
-                    }}
-                  >
-                    Add marker
-                  </button>
-                )}
-                {onAddAdjustment && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      onAddAdjustment();
-                      setSettingsOpen(false);
-                    }}
-                  >
-                    Adjustment layer
-                  </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="danger"
-                  onClick={() => {
-                    onClose();
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Save &amp; back to Clippers
-                </button>
-              </div>
-            )}
+            {settingsMenu}
           </div>
 
           {exporting ? (

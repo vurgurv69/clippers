@@ -1,14 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { ProjectAsset, TimelineClip } from "@/lib/editor-types";
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
-}
+import { clamp } from "@/lib/edit-tools";
 
 /** Filmstrip of thumbnails drawn behind a video/image clip on the timeline. */
-export function ClipStrip({
+export const ClipStrip = memo(function ClipStrip({
   asset,
   clip,
   width,
@@ -30,7 +27,7 @@ export function ClipStrip({
       arr.push({ key: i, left: (i / n) * 100, w: 100 / n + 0.5, t });
     }
     return arr;
-  }, [asset, clip.inPoint, clip.outPoint, width]);
+  }, [asset.kind, clip.inPoint, clip.outPoint, width]);
 
   return (
     <div className="clip-strip" aria-hidden>
@@ -41,10 +38,11 @@ export function ClipStrip({
           src={url(asset, tile.t, 120)}
           style={{ left: `${tile.left}%`, width: `${tile.w}%` }}
           loading="lazy"
+          decoding="async"
           draggable={false}
           alt=""
         />
       ))}
     </div>
   );
-}
+});

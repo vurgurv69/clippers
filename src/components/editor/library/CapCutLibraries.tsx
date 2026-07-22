@@ -22,8 +22,6 @@ import {
   TransitionPreview,
 } from "@/components/editor/library/FxPreviewBox";
 
-export { TemplateLibrary } from "@/components/editor/library/TemplateLibrary";
-
 function matches(q: string, ...parts: string[]) {
   const s = q.trim().toLowerCase();
   if (!s) return true;
@@ -31,6 +29,12 @@ function matches(q: string, ...parts: string[]) {
 }
 
 const TR_CATS = [{ id: "all", label: "All" }, ...TRANSITION_CATEGORIES];
+const TR_DUR_PRESETS = [
+  [0.25, "Fast"],
+  [0.5, "Normal"],
+  [1, "Slow"],
+  [1.5, "Long"],
+] as const;
 
 export function TextLibrary({
   onInsert,
@@ -88,18 +92,34 @@ export function TransitionLibrary({
       searchPlaceholder="Search transitions…"
       footer={
         <div className="cc-duration">
-          <label>
-            <span>Duration</span>
-            <input
-              type="range"
-              min={0.1}
-              max={2}
-              step={0.05}
-              value={duration}
-              onChange={(e) => onDuration(Number(e.target.value))}
-            />
-            <em>{duration.toFixed(2)}s</em>
-          </label>
+          <div className="cc-duration-head">
+            <span>Length</span>
+            <em>
+              {TR_DUR_PRESETS.find(([v]) => Math.abs(duration - v) < 0.03)?.[1] ?? "Custom"}
+              <small>{duration < 1 ? `${Math.round(duration * 1000)} ms` : `${duration.toFixed(1)} s`}</small>
+            </em>
+          </div>
+          <div className="cc-duration-presets">
+            {TR_DUR_PRESETS.map(([v, label]) => (
+              <button
+                key={label}
+                type="button"
+                className={Math.abs(duration - v) < 0.03 ? "cc-dur-chip on" : "cc-dur-chip"}
+                onClick={() => onDuration(v)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <input
+            type="range"
+            min={0.1}
+            max={2}
+            step={0.05}
+            value={duration}
+            onChange={(e) => onDuration(Number(e.target.value))}
+            aria-label="Transition length"
+          />
         </div>
       }
     >

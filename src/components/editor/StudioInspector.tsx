@@ -35,6 +35,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: "text", label: "Text" },
   { id: "effects", label: "Effects" },
   { id: "animation", label: "Anim" },
+  { id: "transitions", label: "Trans" },
   { id: "extra", label: "Extra" },
 ];
 

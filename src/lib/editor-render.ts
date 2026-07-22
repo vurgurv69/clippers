@@ -120,8 +120,16 @@ function xfadeName(t: TransitionKind): string {
       return "dissolve";
     case "zoom":
       return "zoomin";
+    case "zoomout":
+      return "fade";
     case "slide":
       return "slideleft";
+    case "slideright":
+      return "slideright";
+    case "slideup":
+      return "slideup";
+    case "slidedown":
+      return "slidedown";
     case "push":
       return "slideright";
     case "pull":
@@ -145,6 +153,7 @@ function xfadeName(t: TransitionKind): string {
     case "filmburn":
       return "fadegrays";
     case "circlewipe":
+    case "iris":
       return "circleopen";
     case "clockwipe":
       return "radial";
@@ -160,6 +169,10 @@ function xfadeName(t: TransitionKind): string {
       return "wipeup";
     case "wipedown":
       return "wipedown";
+    case "wipeleft":
+      return "wipeleft";
+    case "wiperight":
+      return "wiperight";
     case "fadeblack":
       return "fadeblack";
     case "fadewhite":

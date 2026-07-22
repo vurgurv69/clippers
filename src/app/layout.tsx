@@ -27,6 +27,9 @@ export const metadata: Metadata = {
   title: "Clippers — AI clips with no watermarks",
   description:
     "Paste a video link. Short clips export in full; longer videos get 40–60s viral cuts with colorful captions — watermark free.",
+  verification: {
+    google: "8DpI0ETmTvSubIR8L8jcgjOn0uwzphJutGha3mg17AU",
+  },
 };
 
 export default function RootLayout({

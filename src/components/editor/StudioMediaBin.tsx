@@ -106,12 +106,9 @@ export function StudioMediaBin({
   if (assets.length === 0) {
     return (
       <aside className="studio-bin cc-media">
-        <div className="bin-empty pro-empty">
-          <div className="empty-illustration" aria-hidden>
-            <span className="empty-film" />
-          </div>
-          <p className="empty-title">Add media to start</p>
-          <p className="empty-hint">Videos, photos, or audio — then drop them on the timeline</p>
+        <div className="bin-empty pro-empty cc-bin-center">
+          <p className="empty-title">Import media</p>
+          <p className="empty-hint">Videos, photos, or audio to build your timeline</p>
           <label className="btn primary empty-import cc-import">
             {uploading ? "Uploading…" : "Import Media"}
             <input

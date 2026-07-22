@@ -15,6 +15,16 @@ type Props = {
   onShare?: () => void;
   /** Burn transcript segments as caption text overlays (Phase 29). */
   onBurnCaptions?: (segments: TranscriptSegment[]) => void;
+  /** Manual timed subtitle when speech-to-text isn't enough. */
+  onAddManualCaption?: (opts: {
+    text: string;
+    start: number;
+    duration: number;
+    speaker?: number;
+    important?: boolean;
+  }) => void;
+  /** Nested under AI & Captions — skip the big page title. */
+  embedded?: boolean;
 };
 
 type PendingCut = {
@@ -34,6 +44,8 @@ export function TranscriptPanel({
   onExportThumb,
   onShare,
   onBurnCaptions,
+  onAddManualCaption,
+  embedded,
 }: Props) {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [loading, setLoading] = useState(false);
@@ -46,6 +58,9 @@ export function TranscriptPanel({
   const [selected, setSelected] = useState<{ start: number; end: number } | null>(null);
   const [pendingCut, setPendingCut] = useState<PendingCut | null>(null);
   const [expandedSeg, setExpandedSeg] = useState<number | null>(null);
+  const [scriptDraft, setScriptDraft] = useState("");
+  const [manualText, setManualText] = useState("");
+  const [manualAt, setManualAt] = useState(0);
 
   const activeIdx = useMemo(
     () => activeSegmentIndex(segments, current),
@@ -162,14 +177,74 @@ export function TranscriptPanel({
   }
 
   return (
-    <div className="sidebar-panel cc-transcript-panel">
-      <h3 className="cc-lib-title">Transcript</h3>
+    <div className={embedded ? "cc-transcript-panel embedded" : "sidebar-panel cc-transcript-panel"}>
+      <h3 className="cc-lib-title">{embedded ? "Transcript tools" : "Captions & script"}</h3>
       <p className="cc-lib-hint">
-        Search, seek, and cut segments from the timeline.{" "}
-        {hasWordTiming
-          ? "Word ranges use Whisper timing — not Descript-level editing."
-          : "Segment-level cuts only (no word timestamps)."}
+        {embedded
+          ? "Transcribe, search speech, burn captions, or type a line at any second."
+          : "Transcribe speech into timed captions, edit a talking-points script, or type a line at any second. Speakers get different colors when you burn captions."}
       </p>
+
+      <div className="cc-ai-block">
+        <p className="tool-label">Script notes</p>
+        <textarea
+          className="cc-ai-edit-input"
+          rows={4}
+          placeholder="Outline what should be said on camera… (stays here as your edit checklist)"
+          value={scriptDraft}
+          onChange={(e) => setScriptDraft(e.target.value)}
+        />
+        <p className="cc-lib-hint">
+          Use this as your shot list / talking points while you cut. It doesn’t change the video —
+          captions below do.
+        </p>
+      </div>
+
+      {onAddManualCaption && (
+        <div className="cc-manual-cap">
+          <p className="tool-label">Type a subtitle</p>
+          <input
+            className="cc-ai-filter"
+            placeholder="What they said…"
+            value={manualText}
+            onChange={(e) => setManualText(e.target.value)}
+          />
+          <div className="cc-manual-cap-row">
+            <label>
+              At (s)
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={manualAt}
+                onChange={(e) => setManualAt(Number(e.target.value))}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn tiny"
+              onClick={() => setManualAt(Math.round(current * 10) / 10)}
+            >
+              Use playhead
+            </button>
+          </div>
+          <button
+            type="button"
+            className="btn tiny wide"
+            disabled={!manualText.trim()}
+            onClick={() => {
+              onAddManualCaption({
+                text: manualText.trim(),
+                start: Math.max(0, manualAt),
+                duration: 2.5,
+              });
+              setManualText("");
+            }}
+          >
+            Add subtitle
+          </button>
+        </div>
+      )}
 
       <div className="cc-ai-actions">
         <button

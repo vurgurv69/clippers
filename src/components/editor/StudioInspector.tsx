@@ -13,7 +13,8 @@ export type InspectorTab =
   | "animation"
   | "fx"
   | "text"
-  | "transitions";
+  | "transitions"
+  | "extra";
 
 export type ExportQueueItem = {
   id: string;
@@ -34,6 +35,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: "text", label: "Text" },
   { id: "effects", label: "Effects" },
   { id: "animation", label: "Anim" },
+  { id: "extra", label: "Extra" },
 ];
 
 function relTime(ts?: number) {
@@ -94,9 +96,10 @@ export function StudioInspector({
       <aside className="studio-inspector collapsed" aria-label="Inspector (collapsed)">
         <button
           type="button"
-          className="sidebar-expand"
+          className="insp-rail-btn"
           onClick={onToggleCollapsed}
           title="Show inspector"
+          aria-label="Show inspector"
         >
           ‹
         </button>
@@ -106,6 +109,18 @@ export function StudioInspector({
 
   return (
     <aside className="studio-inspector pro-inspector" aria-label="Inspector">
+      {onToggleCollapsed && (
+        <button
+          type="button"
+          className="insp-rail-btn"
+          onClick={onToggleCollapsed}
+          title="Hide inspector"
+          aria-label="Hide inspector"
+        >
+          ›
+        </button>
+      )}
+      <div className="inspector-main">
       <div className="inspector-head">
         <nav className="inspector-tabs" role="tablist">
           {TABS.map((t) => (
@@ -115,22 +130,15 @@ export function StudioInspector({
               role="tab"
               aria-selected={tab === t.id}
               className={tab === t.id ? "insp-tab on" : "insp-tab"}
-              onClick={() => onTab(t.id)}
+              onClick={() => {
+                onTab(t.id);
+                onInspSearch?.("");
+              }}
             >
               {t.label}
             </button>
           ))}
         </nav>
-        {onToggleCollapsed && (
-          <button
-            type="button"
-            className="btn tiny ghost"
-            onClick={onToggleCollapsed}
-            title="Collapse inspector"
-          >
-            ›
-          </button>
-        )}
       </div>
 
       {onInspSearch && (
@@ -202,6 +210,7 @@ export function StudioInspector({
           ))}
         </div>
       )}
+      </div>
     </aside>
   );
 }

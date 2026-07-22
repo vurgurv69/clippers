@@ -14,7 +14,7 @@ type Props = {
 };
 
 /**
- * CapCut-style left rail: vertical icon tabs + one content panel.
+ * CapCut-style left rail: vertical icon tabs + content + edge close arrow.
  */
 export function StudioSidebar({
   tab,
@@ -28,9 +28,10 @@ export function StudioSidebar({
       <aside className="studio-sidebar cc-sidebar collapsed" aria-label="Library (collapsed)">
         <button
           type="button"
-          className="sidebar-expand"
+          className="bin-rail-btn"
           onClick={onToggleCollapsed}
           title="Show library"
+          aria-label="Show library"
         >
           ›
         </button>
@@ -57,21 +58,19 @@ export function StudioSidebar({
             <span className="cc-rail-label">{t.label}</span>
           </button>
         ))}
-        {onToggleCollapsed && (
-          <button
-            type="button"
-            className="cc-rail-btn collapse"
-            onClick={onToggleCollapsed}
-            title="Collapse library"
-          >
-            <span className="cc-rail-ico" aria-hidden>
-              ‹
-            </span>
-            <span className="cc-rail-label">Hide</span>
-          </button>
-        )}
       </nav>
       <div className="cc-sidebar-panel sidebar-body">{children}</div>
+      {onToggleCollapsed && (
+        <button
+          type="button"
+          className="bin-rail-btn"
+          onClick={onToggleCollapsed}
+          title="Hide library"
+          aria-label="Hide library"
+        >
+          ‹
+        </button>
+      )}
     </aside>
   );
 }

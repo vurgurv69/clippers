@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type Dispatch, type PointerEvent as ReactPointerEvent, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { ClipStrip } from "@/components/editor/ClipStrip";
 import { TrackHeader, type TrackChrome } from "@/components/editor/TrackHeader";
 import { TimelineMinimap } from "@/components/editor/TimelineMinimap";
@@ -17,6 +17,40 @@ import type { ToolId } from "@/lib/edit-tools";
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
+}
+
+function IconBtn({
+  on,
+  onClick,
+  title,
+  label,
+  children,
+  disabled,
+  danger,
+}: {
+  on?: boolean;
+  onClick: () => void;
+  title: string;
+  label: string;
+  children: ReactNode;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${danger ? "btn tl-icon-btn danger" : "btn tl-icon-btn"}${on ? " on" : ""}`}
+      onClick={onClick}
+      title={title}
+      aria-pressed={on}
+      disabled={disabled}
+    >
+      <span className="tl-icon-glyph" aria-hidden>
+        {children}
+      </span>
+      <span className="tl-icon-label">{label}</span>
+    </button>
+  );
 }
 
 function SpeedMenu({
@@ -40,11 +74,12 @@ function SpeedMenu({
     <div className="tl-speed-menu" ref={ref}>
       <button
         type="button"
-        className="btn tiny"
+        className="btn tl-speed-compact"
         onClick={() => setOpen((v) => !v)}
-        title="Playback speed"
+        title="Preview playback speed"
+        aria-expanded={open}
       >
-        {rate}× ▾
+        {rate}×
       </button>
       {open && (
         <div className="tl-speed-pop" role="menu">
@@ -80,6 +115,8 @@ export type TimelineCtx = {
   expanded: boolean;
   setExpanded: Dispatch<SetStateAction<boolean>>;
   total: number;
+  /** Scrubbable canvas length (at least as long as total; longer when empty). */
+  scrubTotal?: number;
   current: number;
   fmt: (t: number) => string;
   snapEnabled: boolean;
@@ -128,7 +165,8 @@ export type TimelineCtx = {
       | "fx"
       | "audio"
       | "text"
-      | "transitions",
+      | "transitions"
+      | "extra",
   ) => void;
   pushToast: (msg: string, kind?: "info" | "success" | "error") => void;
   clipInView: (leftPx: number, widthPx: number) => boolean;
@@ -167,6 +205,17 @@ export type TimelineCtx = {
   nestDepth?: number;
   onExitCompound?: () => void;
   onEnterCompound?: (clipId: string) => void;
+  /** Playback + preview toggles (moved from preview monitor). */
+  playing?: boolean;
+  muted?: boolean;
+  useProxy?: boolean;
+  guidesThirds?: boolean;
+  onTogglePlay?: () => void;
+  onToggleMute?: () => void;
+  onToggleProxy?: () => void;
+  onToggleGuides?: () => void;
+  onDeleteSelection?: () => void;
+  canDeleteSelection?: boolean;
 };
 
 export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
@@ -174,6 +223,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
     expanded,
     setExpanded,
     total,
+    scrubTotal,
     current,
     fmt,
     snapEnabled,
@@ -240,7 +290,55 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
     nestDepth = 0,
     onExitCompound,
     onEnterCompound,
+    playing = false,
+    muted = false,
+    useProxy = true,
+    guidesThirds = false,
+    onTogglePlay,
+    onToggleMute,
+    onToggleProxy,
+    onToggleGuides,
+    onDeleteSelection,
+    canDeleteSelection = false,
   } = ctx;
+
+  const [focusLane, setFocusLane] = useState<"video" | "music" | "text" | null>(
+    null,
+  );
+
+  const laneH = (
+    id: "video" | "music" | "text" | "overlay" | "overlay2",
+    track: TrackChrome,
+  ) => {
+    if (track.collapsed) return 12;
+    const base = Math.max(track.height, id === "overlay" || id === "overlay2" ? 40 : 56);
+    if (!focusLane) return base;
+    if (focusLane === id) return Math.max(base, 110);
+    if (id === "video" || id === "music" || id === "text") {
+      return Math.min(base, 40);
+    }
+    return base;
+  };
+
+  const scrubMax = scrubTotal ?? Math.max(total, 60);
+
+  const scrubToClientX = (clientX: number, free = true) => {
+    const t = timeFromClientX(clientX);
+    seek(free ? clamp(t, 0, scrubMax) : snapSec(t));
+  };
+
+  const beginPlayheadDrag = (e: ReactPointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    scrubToClientX(e.clientX, true);
+    const move = (ev: PointerEvent) => scrubToClientX(ev.clientX, true);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   const trimMode = (): "normal" | "ripple" | "roll" => {
     if (tool === "roll") return "roll";
@@ -351,10 +449,96 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
   return (
     <section className={`studio-timeline${expanded ? " expanded" : ""}`}>
       <div className="timeline-bar">
-                  <div className="timeline-tools left">
-                    <span className="timeline-label">
-                      {nestDepth > 0 ? `Compound · ${fmt(total)}` : `Timeline · ${fmt(total)}`}
+                  <div className="timeline-tools left tl-playback">
+                    <button
+                      type="button"
+                      className={playing ? "btn tl-play on" : "btn tl-play"}
+                      onClick={() => onTogglePlay?.()}
+                      title="Play / pause (Space)"
+                      aria-label={playing ? "Pause" : "Play"}
+                    >
+                      {playing ? (
+                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+                          <rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor" />
+                          <rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+                          <path d="M4 2.5v11l10-5.5L4 2.5z" fill="currentColor" />
+                        </svg>
+                      )}
+                    </button>
+                    <span className="tl-time" title="Playhead / duration">
+                      {fmt(current)}
+                      <em> / {fmt(total)}</em>
                     </span>
+                    <span className="toolbar-divider" aria-hidden />
+                    <IconBtn
+                      on={guidesThirds}
+                      onClick={() => onToggleGuides?.()}
+                      title="Composition guides"
+                      label="Guides"
+                    >
+                      <svg viewBox="0 0 16 16" width="14" height="14">
+                        <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
+                        <path d="M2 6.5h12M2 9.5h12M6.5 2v12M9.5 2v12" stroke="currentColor" strokeWidth="1.2" opacity="0.85" />
+                      </svg>
+                    </IconBtn>
+                    <IconBtn
+                      on={muted}
+                      onClick={() => onToggleMute?.()}
+                      title="Mute (M)"
+                      label={muted ? "Mute" : "Sound"}
+                    >
+                      {muted ? (
+                        <svg viewBox="0 0 16 16" width="14" height="14">
+                          <path d="M2.5 6.2h2.2L8 3.5v9L4.7 9.8H2.5V6.2z" fill="currentColor" />
+                          <path d="m10.2 6.2 3.3 3.3M13.5 6.2l-3.3 3.3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 16 16" width="14" height="14">
+                          <path d="M2.5 6.2h2.2L8 3.5v9L4.7 9.8H2.5V6.2z" fill="currentColor" />
+                          <path d="M10.2 5.4c1.1.9 1.8 2.2 1.8 3.6s-.7 2.7-1.8 3.6" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+                          <path d="M12 3.8c1.8 1.4 2.9 3.4 2.9 5.7S13.8 12.8 12 14.2" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" opacity="0.7" />
+                        </svg>
+                      )}
+                    </IconBtn>
+                    <IconBtn
+                      onClick={() => splitAtPlayhead()}
+                      title="Split at playhead (S)"
+                      label="Split"
+                    >
+                      <svg viewBox="0 0 16 16" width="14" height="14">
+                        <path
+                          d="M8 2v12M4.5 5.5 8 8l3.5-2.5M4.5 10.5 8 8l3.5 2.5"
+                          stroke="currentColor"
+                          strokeWidth="1.4"
+                          fill="none"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </IconBtn>
+                    {onDeleteSelection && (
+                      <IconBtn
+                        onClick={() => onDeleteSelection()}
+                        disabled={!canDeleteSelection}
+                        danger
+                        title="Delete selection (Del)"
+                        label="Delete"
+                      >
+                        <svg viewBox="0 0 16 16" width="14" height="14">
+                          <path
+                            d="M3.5 4.5h9M6 4.5V3.2a.7.7 0 0 1 .7-.7h2.6a.7.7 0 0 1 .7.7v1.3M5.2 4.5l.6 8.2a1 1 0 0 0 1 .9h2.4a1 1 0 0 0 1-.9l.6-8.2"
+                            stroke="currentColor"
+                            strokeWidth="1.35"
+                            fill="none"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </IconBtn>
+                    )}
                     {nestDepth > 0 && onExitCompound && (
                       <button
                         className="btn tiny on"
@@ -365,37 +549,8 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                       </button>
                     )}
                   </div>
-                  {/* Dedicated timeline toolbar — Snap / Magnet / Ripple / Zoom / height / speed */}
+                  {/* Timeline chrome — zoom / height / speed (Snap·Magnet·Ripple·Proxy live in Extra) */}
                   <div className="timeline-tools timeline-pro-tools" role="toolbar" aria-label="Timeline options">
-                    <button
-                      className={snapEnabled ? "btn tiny on" : "btn tiny"}
-                      onClick={() => setSnapEnabled((s) => !s)}
-                      title="Edge snapping"
-                    >
-                      Snap
-                    </button>
-                    <button
-                      className={magnetic ? "btn tiny on" : "btn tiny"}
-                      onClick={() => setMagnetic((m) => !m)}
-                      title="Magnetic: drag snaps edges and closes gaps on release"
-                    >
-                      Magnet
-                    </button>
-                    <button
-                      className={rippleEnabled ? "btn tiny on" : "btn tiny"}
-                      onClick={() => setRippleEnabled((r) => !r)}
-                      title="Ripple edit — close gaps when deleting"
-                    >
-                      Ripple
-                    </button>
-                    <button
-                      className={freeV1 ? "btn tiny on" : "btn tiny"}
-                      onClick={onToggleFreeV1}
-                      title="Free-place V1 clips vs gapless pack"
-                    >
-                      {freeV1 ? "Free V1" : "Pack V1"}
-                    </button>
-                    <span className="toolbar-divider" aria-hidden />
                     <label className="tl-zoom" title="Timeline zoom (Ctrl + wheel)">
                       <span>Zoom</span>
                       <input
@@ -409,13 +564,20 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         aria-label="Timeline zoom"
                       />
                     </label>
-                    <button
-                      className="btn tiny"
+                    <IconBtn
+                      on={expanded}
                       onClick={() => setExpanded((e) => !e)}
                       title={expanded ? "Compact track height" : "Tall track height"}
+                      label={expanded ? "Compact" : "Tall"}
                     >
-                      {expanded ? "Compact" : "Tall"}
-                    </button>
+                      <svg viewBox="0 0 16 16" width="14" height="14">
+                        {expanded ? (
+                          <path d="M3 6.5h10M3 9.5h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                        ) : (
+                          <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                        )}
+                      </svg>
+                    </IconBtn>
                     <span className="toolbar-divider" aria-hidden />
                     <SpeedMenu rate={rate} onSetRate={onSetRate} />
                   </div>
@@ -449,6 +611,12 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                 >
                   <div className="timeline-inner" style={{ width: timelineWidth }}>
                     <div
+                      className="scrub-rail"
+                      onPointerDown={beginPlayheadDrag}
+                      title="Drag to move playhead"
+                      aria-hidden
+                    />
+                    <div
                       className="ruler"
                       onPointerDown={(e) => {
                         if (tool === "hand") return;
@@ -458,7 +626,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           setPxPerSec((p) => clamp(Math.round(p * factor), 20, 400));
                           return;
                         }
-                        seek(snapSec(timeFromClientX(e.clientX)));
+                        beginPlayheadDrag(e);
                       }}
                     >                      {minorTicks.map((t) => (
                         <span key={`m${t}`} className="tick-minor" style={{ left: t * pxPerSec }} />
@@ -490,6 +658,10 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                     )}
       
                     {/* V1 MAIN video track */}
+                    <div
+                      className={`lane-wrap${focusLane === "video" ? " focused" : ""}`}
+                      onPointerDownCapture={() => setFocusLane("video")}
+                    >
                     <TrackHeader
                       track={tracks.video}
                       onPatch={(p) => patchTrack("video", p)}
@@ -498,7 +670,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                     {!tracks.video.hidden && (
                     <div
                       className="track track-clips"
-                      style={{ height: tracks.video.collapsed ? 12 : tracks.video.height, opacity: tracks.video.muted ? 0.55 : 1 }}
+                      style={{ height: laneH("video", tracks.video), opacity: tracks.video.muted ? 0.55 : 1 }}
                       onPointerDown={(e) => {
                         if (e.target !== e.currentTarget) return;
                         if (tracks.video.locked) return;
@@ -508,37 +680,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           setPxPerSec((p) => clamp(Math.round(p * factor), 20, 400));
                           return;
                         }
-                        const el = trackRef.current;
-                        if (!el) return;
-                        const rect = el.getBoundingClientRect();
-                        const x0 = e.clientX - rect.left + el.scrollLeft;
-                        setMarquee({ x0, x1: x0 });
-                        setSelectedIds([]);
-                        setSelectedId(null);
-                        const move = (ev: PointerEvent) => {
-                          const x1 = ev.clientX - rect.left + el.scrollLeft;
-                          setMarquee({ x0, x1 });
-                        };
-                        const up = (ev: PointerEvent) => {
-                          window.removeEventListener("pointermove", move);
-                          window.removeEventListener("pointerup", up);
-                          const x1 = ev.clientX - rect.left + el.scrollLeft;
-                          const lo = Math.min(x0, x1) / pxPerSec;
-                          const hi = Math.max(x0, x1) / pxPerSec;
-                          setMarquee(null);
-                          if (Math.abs(x1 - x0) < 4) return;
-                          const hit = clips
-                            .map((c, i) => ({ c, i, a: starts[i], b: starts[i] + clipLength(c) }))
-                            .filter((r) => clipLane(r.c) === 0 && r.b > lo && r.a < hi)
-                            .map((r) => r.c.id);
-                          if (hit.length) {
-                            setSelectedIds(hit);
-                            setSelectedId(hit[hit.length - 1]);
-                            pushToast(`${hit.length} clip${hit.length === 1 ? "" : "s"} selected`, "info");
-                          }
-                        };
-                        window.addEventListener("pointermove", move);
-                        window.addEventListener("pointerup", up);
+                        beginPlayheadDrag(e);
                       }}
                     >
                       {marquee && (
@@ -668,6 +810,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                       })}
                     </div>
                     )}
+                    </div>
       
                     {/* V2 OVERLAY track (lane 1) */}
                     <TrackHeader
@@ -802,6 +945,10 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                     )}
       
                     {/* AUDIO track */}
+                    <div
+                      className={`lane-wrap${focusLane === "music" ? " focused" : ""}`}
+                      onPointerDownCapture={() => setFocusLane("music")}
+                    >
                     <TrackHeader
                       track={tracks.music}
                       onPatch={(p) => patchTrack("music", p)}
@@ -810,7 +957,10 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                     {!tracks.music.hidden && (
                     <div
                       className="track track-audio"
-                      style={{ height: tracks.music.collapsed ? 12 : tracks.music.height, opacity: tracks.music.muted ? 0.55 : 1 }}
+                      style={{ height: laneH("music", tracks.music), opacity: tracks.music.muted ? 0.55 : 1 }}
+                      onPointerDown={(e) => {
+                        if (e.target === e.currentTarget) beginPlayheadDrag(e);
+                      }}
                     >
                       {music && musicAsset ? (
                         <div
@@ -924,12 +1074,17 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         );
                       })}
                       {!music && !musicTracks.length && (
-                        <span className="lane-empty">No music — add a track from the toolbar.</span>
+                        <span className="lane-empty">No audio — add music or SFX here</span>
                       )}
                     </div>
                     )}
+                    </div>
       
                     {/* TEXT track */}
+                    <div
+                      className={`lane-wrap${focusLane === "text" ? " focused" : ""}`}
+                      onPointerDownCapture={() => setFocusLane("text")}
+                    >
                     <TrackHeader
                       track={tracks.text}
                       onPatch={(p) => patchTrack("text", p)}
@@ -938,7 +1093,10 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                     {!tracks.text.hidden && (
                     <div
                       className="track track-text"
-                      style={{ height: tracks.text.collapsed ? 12 : tracks.text.height, opacity: 1 }}
+                      style={{ height: laneH("text", tracks.text), opacity: 1 }}
+                      onPointerDown={(e) => {
+                        if (e.target === e.currentTarget) beginPlayheadDrag(e);
+                      }}
                     >
                       {texts.map((t) => (
                         <div
@@ -986,18 +1144,29 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           />
                         </div>
                       ))}
-                      {!texts.length && <span className="lane-empty">No text — press “Text” to add a title.</span>}
+                      {!texts.length && <span className="lane-empty">No text — press Text to add a title</span>}
                     </div>
                     )}
+                    </div>
       
-                    <div className="playhead" style={{ left: current * pxPerSec }} />
+                    <div
+                      className="playhead"
+                      style={{ left: current * pxPerSec }}
+                      onPointerDown={beginPlayheadDrag}
+                      title="Drag to scrub"
+                      role="slider"
+                      aria-valuenow={current}
+                      aria-valuemin={0}
+                      aria-valuemax={scrubMax}
+                      aria-label="Playhead"
+                    />
                   </div>
                 </div>
       
                 <TimelineMinimap
                   clips={clips}
                   starts={starts}
-                  total={total}
+                  total={scrubMax}
                   current={current}
                   selectedIds={selectedIds}
                   music={music}

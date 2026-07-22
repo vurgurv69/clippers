@@ -7,10 +7,7 @@ type Props = {
   tool: ToolId;
   onSetTool: (t: ToolId) => void;
   selectedId: string | null;
-  selectedTextId: string | null;
-  onSplit: () => void;
   onDuplicate: () => void;
-  onDelete: () => void;
 };
 
 const TOOLS: { id: ToolId; label: string; shortcut: string }[] = [
@@ -25,35 +22,26 @@ const TOOLS: { id: ToolId; label: string; shortcut: string }[] = [
   { id: "zoom", label: "Zoom", shortcut: "Z" },
 ];
 
-/**
- * Slim edit strip: one Tool Selector + Split.
- * Duplicate / Delete live in a More menu to cut permanent chrome.
- */
+/** Slim edit strip: tool selector (left) · Duplicate (right). Split/Delete live on the timeline bar. */
 export function StudioToolbar({
   tool,
   onSetTool,
   selectedId,
-  selectedTextId,
-  onSplit,
   onDuplicate,
-  onDelete,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const active = TOOLS.find((t) => t.id === tool) || TOOLS[0];
+  const canEditClip = Boolean(selectedId);
 
   useEffect(() => {
-    if (!open && !moreOpen) return;
+    if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setMoreOpen(false);
-      }
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
-  }, [open, moreOpen]);
+  }, [open]);
 
   return (
     <div className="studio-toolbar pro-toolbar" role="toolbar" aria-label="Editing tools" ref={wrapRef}>
@@ -64,10 +52,7 @@ export function StudioToolbar({
           aria-expanded={open}
           aria-haspopup="listbox"
           title={`${active.label} tool (${active.shortcut})`}
-          onClick={() => {
-            setOpen((v) => !v);
-            setMoreOpen(false);
-          }}
+          onClick={() => setOpen((v) => !v)}
         >
           <span className="tool-selector-label">{active.label}</span>
           <span className="tool-selector-caret" aria-hidden>
@@ -95,58 +80,16 @@ export function StudioToolbar({
         )}
       </div>
 
-      <span className="toolbar-divider" aria-hidden />
-
-      <button type="button" className="tool-btn primary-lite" onClick={onSplit} title="Split at playhead (S)">
-        Split
-      </button>
-
-      <span className="toolbar-spacer" />
-
-      <div className="toolbar-group">
+      <div className="toolbar-right">
         <button
           type="button"
-          className="tool-btn ghost"
-          onClick={() => {
-            setMoreOpen((v) => !v);
-            setOpen(false);
-          }}
-          aria-expanded={moreOpen}
-          title="More edit actions"
+          className="tool-btn"
+          onClick={onDuplicate}
+          disabled={!canEditClip}
+          title="Duplicate (Ctrl+D)"
         >
-          More ▾
+          Duplicate
         </button>
-        {moreOpen && (
-          <ul className="tool-menu tool-menu-right" role="menu">
-            <li role="none">
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!selectedId}
-                onClick={() => {
-                  onDuplicate();
-                  setMoreOpen(false);
-                }}
-              >
-                Duplicate
-              </button>
-            </li>
-            <li role="none">
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={!selectedId && !selectedTextId}
-                onClick={() => {
-                  onDelete();
-                  setMoreOpen(false);
-                }}
-              >
-                Delete
-              </button>
-            </li>
-          </ul>
-        )}
       </div>
     </div>
   );

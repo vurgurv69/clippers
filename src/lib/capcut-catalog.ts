@@ -17,21 +17,49 @@ export type LibraryCategory = { id: string; label: string };
 /** Vertical rail tabs (one panel open at a time). */
 export const LIBRARY_TABS = [
   { id: "media", label: "Media", icon: "▣" },
-  { id: "ai", label: "AI", icon: "✦" },
-  { id: "transcript", label: "Script", icon: "≡" },
-  { id: "text", label: "Text", icon: "T" },
-  { id: "audio", label: "Audio", icon: "♪" },
-  { id: "transitions", label: "Trans", icon: "⇄" },
-  { id: "effects", label: "Effects", icon: "✧" },
-  { id: "stickers", label: "Stickers", icon: "◇" },
+  { id: "ai", label: "AI & Cap", icon: "✦" },
   { id: "templates", label: "Templates", icon: "▦" },
-  { id: "filters", label: "Filters", icon: "◎" },
+  { id: "transitions", label: "Trans", icon: "⇄" },
+  { id: "effects", label: "Effects", icon: "◈" },
   { id: "animations", label: "Anim", icon: "↻" },
-  { id: "broll", label: "B-roll", icon: "⧉" },
-  { id: "cleanup", label: "Clean", icon: "✂" },
+  { id: "filters", label: "Filters", icon: "◎" },
+  { id: "broll", label: "Cutaway", icon: "⧉" },
+  { id: "cleanup", label: "Cleanup", icon: "✂" },
   { id: "motion", label: "CTA", icon: "▶" },
   { id: "publish", label: "Publish", icon: "⇪" },
 ] as const;
+
+/**
+ * Transition picker — classic NLE / open-source looks (xfade family).
+ */
+export const TRANSITION_UI_IDS: TransitionKind[] = [
+  "crossfade",
+  "dissolve",
+  "fadeblack",
+  "fadewhite",
+  "flash",
+  "zoom",
+  "slide",
+  "push",
+  "pull",
+  "whip",
+  "blur",
+  "spin",
+  "warp",
+  "liquid",
+  "morph",
+  "glitch",
+  "shake",
+  "filmburn",
+  "circlewipe",
+  "clockwipe",
+  "pageturn",
+  "cube",
+  "flip",
+  "stretch",
+  "wipeup",
+  "wipedown",
+];
 
 export type LibraryTabId = (typeof LIBRARY_TABS)[number]["id"];
 
@@ -308,53 +336,43 @@ export const MOTION_CTA_CARDS: ShellCard[] = [
 
 /* ── Transitions ─────────────────────────────────────── */
 
+/** Slim categories — previews carry the look; no Basic/Camera chip clutter. */
 export const TRANSITION_CATEGORIES: LibraryCategory[] = [
-  { id: "basic", label: "Basic" },
-  { id: "camera", label: "Camera" },
-  { id: "blur", label: "Blur" },
-  { id: "light", label: "Light" },
-  { id: "glitch", label: "Glitch" },
-  { id: "3d", label: "3D" },
-  { id: "zoom", label: "Zoom" },
-  { id: "warp", label: "Warp" },
-  { id: "spin", label: "Spin" },
-  { id: "film", label: "Film" },
-  { id: "retro", label: "Retro" },
+  { id: "smooth", label: "Smooth" },
+  { id: "move", label: "Move" },
   { id: "flash", label: "Flash" },
-  { id: "slide", label: "Slide" },
-  { id: "whip", label: "Whip" },
-  { id: "creative", label: "Creative" },
+  { id: "style", label: "Style" },
   { id: "favorites", label: "Favorites" },
 ];
 
 const TR_CAT: Partial<Record<TransitionKind, string>> = {
-  none: "basic",
-  crossfade: "basic",
-  dissolve: "basic",
-  fadeblack: "film",
-  fadewhite: "light",
+  none: "smooth",
+  crossfade: "smooth",
+  dissolve: "smooth",
+  fadeblack: "smooth",
+  fadewhite: "flash",
   flash: "flash",
-  zoom: "zoom",
-  slide: "slide",
-  push: "slide",
-  pull: "slide",
-  whip: "whip",
-  blur: "blur",
-  spin: "spin",
-  warp: "warp",
-  liquid: "warp",
-  morph: "creative",
-  glitch: "glitch",
-  shake: "camera",
-  filmburn: "film",
-  circlewipe: "creative",
-  clockwipe: "retro",
-  pageturn: "creative",
-  cube: "3d",
-  flip: "3d",
-  stretch: "creative",
-  wipeup: "slide",
-  wipedown: "slide",
+  zoom: "move",
+  slide: "move",
+  push: "move",
+  pull: "move",
+  whip: "move",
+  blur: "style",
+  spin: "move",
+  warp: "style",
+  liquid: "style",
+  morph: "style",
+  glitch: "style",
+  shake: "style",
+  filmburn: "flash",
+  circlewipe: "style",
+  clockwipe: "style",
+  pageturn: "style",
+  cube: "style",
+  flip: "style",
+  stretch: "style",
+  wipeup: "move",
+  wipedown: "move",
 };
 
 export type TransitionCard = {
@@ -364,10 +382,14 @@ export type TransitionCard = {
   swatch: string;
 };
 
-export const TRANSITION_CARDS: TransitionCard[] = TRANSITION_DEFS.map((t) => ({
+const TRANSITION_UI_SET = new Set<string>(TRANSITION_UI_IDS);
+
+export const TRANSITION_CARDS: TransitionCard[] = TRANSITION_DEFS.filter(
+  (t) => t.id === "none" || TRANSITION_UI_SET.has(t.id),
+).map((t) => ({
   id: t.id,
   label: t.label,
-  category: TR_CAT[t.id] || "creative",
+  category: TR_CAT[t.id] || "style",
   swatch: transitionSwatch(t.id),
 }));
 
@@ -461,19 +483,8 @@ function effectSwatch(kind: EffectKind): string {
 
 /* ── Filters (color presets) ─────────────────────────── */
 
-export const FILTER_CATEGORIES: LibraryCategory[] = [
-  { id: "cinematic", label: "Cinematic" },
-  { id: "warm", label: "Warm" },
-  { id: "cool", label: "Cool" },
-  { id: "vintage", label: "Vintage" },
-  { id: "film", label: "Film" },
-  { id: "night", label: "Night" },
-  { id: "portrait", label: "Portrait" },
-  { id: "nature", label: "Nature" },
-  { id: "travel", label: "Travel" },
-  { id: "food", label: "Food" },
-  { id: "bw", label: "Black & White" },
-];
+/** No category chips — filters show as one photo grid. */
+export const FILTER_CATEGORIES: LibraryCategory[] = [];
 
 export type FilterCard = {
   id: string;
@@ -561,51 +572,55 @@ function filterPreview(id: string): string {
 }
 
 /* ── Animations ──────────────────────────────────────── */
+/** Classic editor text/motion presets (CapCut / Premiere / Remotion-style). */
 
 export const ANIM_CATEGORIES: LibraryCategory[] = [
+  { id: "all", label: "All" },
   { id: "in", label: "In" },
   { id: "out", label: "Out" },
-  { id: "combo", label: "Combo" },
+  { id: "loop", label: "Loop" },
 ];
 
-export const ANIM_STYLE_CATEGORIES: LibraryCategory[] = [
-  { id: "fade", label: "Fade" },
-  { id: "pop", label: "Pop" },
-  { id: "bounce", label: "Bounce" },
-  { id: "slide", label: "Slide" },
-  { id: "scale", label: "Scale" },
-  { id: "rotate", label: "Rotate" },
-  { id: "glitch", label: "Glitch" },
-  { id: "camera", label: "Camera" },
-  { id: "elastic", label: "Elastic" },
-  { id: "smooth", label: "Smooth" },
-  { id: "cinematic", label: "Cinematic" },
-];
+export const ANIM_STYLE_CATEGORIES: LibraryCategory[] = [];
 
 export type AnimCard = {
   id: string;
   label: string;
-  phase: "in" | "out" | "combo";
+  phase: "in" | "out" | "loop" | "combo";
   style: string;
-  /** Maps to TextAnim or clip transform hint */
+  /** Maps to TextAnim applied on the text overlay */
   textAnim: TextAnim;
   preview: string;
 };
 
 export const ANIM_CARDS: AnimCard[] = [
   { id: "fade-in", label: "Fade In", phase: "in", style: "fade", textAnim: "fade", preview: "fade" },
-  { id: "fade-out", label: "Fade Out", phase: "out", style: "fade", textAnim: "fade", preview: "fade" },
-  { id: "slide-in", label: "Slide In", phase: "in", style: "slide", textAnim: "slide", preview: "slide" },
-  { id: "slide-out", label: "Slide Out", phase: "out", style: "slide", textAnim: "slide", preview: "slide" },
+  { id: "fade-out", label: "Fade Out", phase: "out", style: "fade", textAnim: "fade", preview: "fadeout" },
+  { id: "slide-left", label: "Slide Left", phase: "in", style: "slide", textAnim: "slide", preview: "slideleft" },
+  { id: "slide-right", label: "Slide Right", phase: "in", style: "slide", textAnim: "slide", preview: "slideright" },
+  { id: "slide-up", label: "Slide Up", phase: "in", style: "slide", textAnim: "slide", preview: "slideup" },
+  { id: "slide-down", label: "Slide Down", phase: "out", style: "slide", textAnim: "slide", preview: "slidedown" },
   { id: "pop-in", label: "Pop", phase: "in", style: "pop", textAnim: "pop", preview: "pop" },
   { id: "bounce-in", label: "Bounce", phase: "in", style: "bounce", textAnim: "pop", preview: "bounce" },
   { id: "scale-in", label: "Scale Up", phase: "in", style: "scale", textAnim: "zoom", preview: "scale" },
-  { id: "rotate-in", label: "Rotate", phase: "combo", style: "rotate", textAnim: "zoom", preview: "rotate" },
+  { id: "scale-out", label: "Scale Down", phase: "out", style: "scale", textAnim: "zoom", preview: "scaledown" },
+  { id: "zoom-punch", label: "Zoom Punch", phase: "in", style: "zoom", textAnim: "zoom", preview: "zoompunch" },
+  { id: "rotate-in", label: "Spin In", phase: "in", style: "rotate", textAnim: "zoom", preview: "rotate" },
+  { id: "flip-y", label: "Flip", phase: "in", style: "flip", textAnim: "pop", preview: "flip" },
+  { id: "typewriter", label: "Typewriter", phase: "in", style: "type", textAnim: "fade", preview: "type" },
+  { id: "blur-in", label: "Blur In", phase: "in", style: "blur", textAnim: "fade", preview: "blurin" },
   { id: "glitch-in", label: "Glitch", phase: "in", style: "glitch", textAnim: "slide", preview: "glitch" },
-  { id: "camera-pan", label: "Camera Pan", phase: "combo", style: "camera", textAnim: "none", preview: "camera" },
   { id: "elastic", label: "Elastic", phase: "in", style: "elastic", textAnim: "pop", preview: "elastic" },
-  { id: "smooth", label: "Smooth", phase: "combo", style: "smooth", textAnim: "fade", preview: "smooth" },
+  { id: "wiggle", label: "Wiggle", phase: "loop", style: "wiggle", textAnim: "pop", preview: "wiggle" },
+  { id: "pulse", label: "Pulse", phase: "loop", style: "pulse", textAnim: "pop", preview: "pulse" },
+  { id: "shake-txt", label: "Shake", phase: "loop", style: "shake", textAnim: "slide", preview: "shake" },
+  { id: "neon-flicker", label: "Neon Flicker", phase: "loop", style: "neon", textAnim: "fade", preview: "neon" },
+  { id: "karoke-pop", label: "Karaoke Pop", phase: "in", style: "karaoke", textAnim: "pop", preview: "karaoke" },
+  { id: "drop-in", label: "Drop", phase: "in", style: "drop", textAnim: "slide", preview: "drop" },
+  { id: "rise-out", label: "Rise Out", phase: "out", style: "rise", textAnim: "slide", preview: "rise" },
+  { id: "smooth", label: "Soft Dissolve", phase: "combo", style: "smooth", textAnim: "fade", preview: "smooth" },
   { id: "cinematic", label: "Cinematic", phase: "combo", style: "cinematic", textAnim: "zoom", preview: "cine" },
+  { id: "none-anim", label: "None", phase: "combo", style: "none", textAnim: "none", preview: "none" },
 ];
 
 /* ── Project templates (suggested empty-state) ─────── */

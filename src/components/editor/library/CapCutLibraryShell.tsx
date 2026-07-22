@@ -34,20 +34,22 @@ export function CapCutLibraryShell({
           aria-label={`Search ${title}`}
         />
       </header>
-      <div className="cc-cats" role="tablist" aria-label={`${title} categories`}>
-        {cats.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            role="tab"
-            aria-selected={category === c.id}
-            className={category === c.id ? "cc-cat on" : "cc-cat"}
-            onClick={() => setCategory(c.id)}
-          >
-            {c.label}
-          </button>
-        ))}
-      </div>
+      {cats.length > 0 && (
+        <div className="cc-cats" role="tablist" aria-label={`${title} categories`}>
+          {cats.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="tab"
+              aria-selected={category === c.id}
+              className={category === c.id ? "cc-cat on" : "cc-cat"}
+              onClick={() => setCategory(c.id)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="cc-lib-body">{children({ category, query })}</div>
       {footer}
     </div>

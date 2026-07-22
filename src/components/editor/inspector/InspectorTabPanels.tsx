@@ -1,42 +1,78 @@
 "use client";
 
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { StudioSlider as Slider } from "@/components/editor/StudioSlider";
 import { BezierEditor } from "@/components/editor/BezierEditor";
-import { ColorWheelsRow } from "@/components/editor/ColorWheels";
-import { TransitionChip, TransitionDemo } from "@/components/editor/TransitionWidgets";
+import { ColorWheelsRow, HueColorWheel } from "@/components/editor/ColorWheels";
+import { TransitionChip } from "@/components/editor/TransitionWidgets";
+import { TextPanel } from "@/components/editor/inspector/TextPanel";
+import {
+  EffectPreview,
+  TransitionPreview,
+} from "@/components/editor/library/FxPreviewBox";
+import { TRANSITION_UI_IDS } from "@/lib/capcut-catalog";
 import {
   COLOR_PRESETS,
   DEFAULT_TRANSFORM,
   EFFECT_DEFS,
   KEYFRAME_EASES,
-  STICKER_PRESETS,
-  STICKER_PACK,
-  TEXT_FONTS,
-  TEXT_TEMPLATES,
   TRANSITION_DEFS,
   clipLane,
   clipLength,
   type BezierHandles,
+  type ClipLayer,
   type EffectKind,
   type KeyframeEase,
   type KeyframeProp,
   type MusicTrack,
   type ProjectAsset,
-  type TextAlign,
-  type TextAnim,
   type TextOverlay,
-  type TextTransform,
   type TimelineClip,
   type TimelineMarker,
   type ClipTransform,
   type TransitionKind,
 } from "@/lib/editor-types";
-import { InspSection, inspMatch } from "@/components/editor/InspSection";
+import { InspSection, PanelBlock, inspMatch } from "@/components/editor/InspSection";
 import { AudioMixerStrip } from "@/components/editor/AudioMixerStrip";
 import { KeyframeGraph } from "@/components/editor/KeyframeGraph";
 
-const TRANSITIONS = TRANSITION_DEFS;
+const TRANSITION_UI = new Set<string>(TRANSITION_UI_IDS);
+const TRANSITIONS = TRANSITION_DEFS.filter(
+  (t) => t.id === "none" || TRANSITION_UI.has(t.id),
+);
+
+function YoutubeAudioImport({
+  busy,
+  onImport,
+}: {
+  busy: boolean;
+  onImport: (url: string) => void | Promise<void>;
+}) {
+  const [url, setUrl] = useState("");
+  return (
+    <div className="yt-audio-import">
+      <input
+        className="clip-layers-search"
+        placeholder="Paste YouTube link…"
+        value={url}
+        disabled={busy}
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && url.trim()) void onImport(url.trim());
+        }}
+        aria-label="YouTube URL"
+      />
+      <button
+        type="button"
+        className="btn tiny"
+        disabled={busy || !url.trim()}
+        onClick={() => void onImport(url.trim())}
+      >
+        {busy ? "…" : "Get audio"}
+      </button>
+    </div>
+  );
+}
 
 export type InspectorPanelCtx = {
   projectId: string;
@@ -99,6 +135,10 @@ export type InspectorPanelCtx = {
   detachClipAudio: (clipId: string) => void;
   relinkClipAudio: (clipId: string | undefined) => void;
   onMusicFile: (f: File) => void;
+  /** Extract audio from a video file into the music lane. */
+  onExtractAudioFromVideo?: (f: File) => void | Promise<void>;
+  /** Download audio from a YouTube URL into the music lane. */
+  onImportYoutubeAudio?: (url: string) => void | Promise<void>;
   addText: () => void;
   addSticker: (glyph: string) => void;
   addPackSticker?: (src: string, label: string) => void;
@@ -116,6 +156,23 @@ export type InspectorPanelCtx = {
   patchMarker?: (id: string, patch: Partial<TimelineMarker>) => void;
   removeMarker?: (id: string) => void;
   addAdjustmentLayer?: () => void;
+  addClipLayer?: (clipId: string, assetId: string, name?: string) => string | undefined;
+  uploadClipLayerFile?: (clipId: string, file: File, name?: string) => Promise<string | undefined>;
+  renameClipLayer?: (clipId: string, layerId: string, name: string) => void;
+  removeClipLayer?: (clipId: string, layerId: string) => void;
+  patchClipLayer?: (clipId: string, layerId: string, patch: Partial<ClipLayer>) => void;
+  thumbUrl?: (a: ProjectAsset, t: number, w?: number) => string;
+  assetUrl?: (a: ProjectAsset, opts?: { full?: boolean }) => string;
+  useProxy?: boolean;
+  onToggleProxy?: () => void;
+  snapEnabled?: boolean;
+  setSnapEnabled?: Dispatch<SetStateAction<boolean>>;
+  magnetic?: boolean;
+  setMagnetic?: Dispatch<SetStateAction<boolean>>;
+  rippleEnabled?: boolean;
+  setRippleEnabled?: Dispatch<SetStateAction<boolean>>;
+  freeV1?: boolean;
+  onToggleFreeV1?: () => void;
   setMulticamActive?: (clipId: string) => void;
   cutMulticamAtPlayhead?: (clipId: string) => void;
   syncMulticamGroup?: () => void | Promise<void>;
@@ -186,67 +243,68 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
           <p className="tool-hint">Click an angle to cut at the playhead. Only the live angle exports.</p>
         </InspSection>
       )}
-      <InspSection
-        id="speed"
-        title={`Speed · ${(selectedClip.speed || 1).toFixed(2)}×`}
-        filterMatch={inspMatch(ctx.inspSearch || "", "speed", "playback")}
+      <PanelBlock
+        title={`Clip speed · ${(selectedClip.speed || 1).toFixed(2)}×`}
+        hint="How fast this clip plays in the final cut (not the preview Speed menu)."
+        filterMatch={inspMatch(ctx.inspSearch || "", "speed", "playback", "ramp")}
       >
       <Slider
         label="Playback speed"
+        hint="0.5× = slow motion, 2× = double speed."
         min={0.25}
         max={4}
         value={selectedClip.speed || 1}
         onChange={(v) => patchClip(selectedClip.id, { speed: v })}
       />
-      <div className="chip-row">
+      <div className="seg-row compact">
         {[0.5, 1, 1.5, 2].map((s) => (
           <button
             key={s}
-            className={Math.abs((selectedClip.speed || 1) - s) < 0.01 ? "chip on" : "chip"}
+            type="button"
+            className={Math.abs((selectedClip.speed || 1) - s) < 0.01 ? "seg-btn on" : "seg-btn"}
             onClick={() => patchClip(selectedClip.id, { speed: s })}
           >
-            <span>{s}×</span>
+            {s}×
           </button>
         ))}
       </div>
       {ctx.applySpeedRamp && (
         <>
-          <p className="tool-label" style={{ marginTop: "0.55rem" }}>
+          <p className="tool-label" style={{ marginTop: "0.45rem" }}>
             Speed ramps
           </p>
-          <div className="chip-row">
+          <div className="seg-row compact wrap">
             {(
               [
                 ["ramp-in", "In"],
                 ["ramp-out", "Out"],
                 ["ramp-up", "Up"],
                 ["ramp-down", "Down"],
-                ["slow-mo", "Slow-mo"],
+                ["slow-mo", "Slow"],
               ] as const
             ).map(([kind, label]) => (
               <button
                 key={kind}
                 type="button"
-                className="chip"
+                className="seg-btn"
                 title={kind}
                 onClick={() => ctx.applySpeedRamp?.(selectedClip.id, kind)}
               >
-                <span>{label}</span>
+                {label}
               </button>
             ))}
           </div>
-          <p className="tool-hint">Splits the clip into speed steps (exports with existing pipeline).</p>
         </>
       )}
-      </InspSection>
+      </PanelBlock>
 
-      <InspSection
-        id="color-basic"
-        title="Color"
-        filterMatch={inspMatch(ctx.inspSearch || "", "color", "brightness", "contrast", "saturation", "vignette", "sharpen")}
+      <PanelBlock
+        title="Look"
+        hint="Everyday picture fixes. Presets apply a full look; sliders fine-tune."
+        filterMatch={inspMatch(ctx.inspSearch || "", "color", "brightness", "contrast", "saturation", "vignette", "sharpen", "look", "preset")}
       >
-      <p className="tool-label">Color presets</p>
-      <div className="preset-grid">
+      <p className="tool-label">Presets</p>
+      <div className="preset-grid compact">
         {COLOR_PRESETS.map((p) => (
           <button
             key={p.id}
@@ -259,6 +317,7 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       </div>
       <Slider
         label="Brightness"
+        hint="Overall light level."
         min={0}
         max={2}
         value={selectedClip.color.brightness}
@@ -266,6 +325,7 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       />
       <Slider
         label="Contrast"
+        hint="Separation between dark and bright areas."
         min={0}
         max={2}
         value={selectedClip.color.contrast}
@@ -273,6 +333,7 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       />
       <Slider
         label="Saturation"
+        hint="Color intensity. Lower = closer to gray."
         min={0}
         max={3}
         value={selectedClip.color.saturation}
@@ -280,6 +341,7 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       />
       <Slider
         label="Sharpen"
+        hint="Edge crispness."
         min={0}
         max={2}
         value={selectedClip.color.sharpen}
@@ -287,12 +349,13 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       />
       <Slider
         label="Vignette"
+        hint="Darkens the corners."
         min={0}
         max={1}
         value={selectedClip.color.vignette}
         onChange={(v) => patchColor(selectedClip.id, { vignette: v, preset: "custom" })}
       />
-      </InspSection>
+      </PanelBlock>
 
       <InspSection
         id="hsl"
@@ -316,19 +379,51 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       <p className="tool-hint">Saturation is above · hue/lightness bake on export.</p>
       </InspSection>
 
-      <InspSection
-        id="lgg"
+      <PanelBlock
         title="Lift / Gamma / Gain"
+        hint="Drag anywhere on a wheel — up/down and left/right. Double-click to reset."
         filterMatch={inspMatch(ctx.inspSearch || "", "lift", "gamma", "gain", "wheels")}
       >
-      <ColorWheelsRow
-        lift={selectedClip.color.lift ?? 0}
-        gamma={selectedClip.color.gamma ?? 0}
-        gain={selectedClip.color.gain ?? 0}
-        onChange={(p) => patchColor(selectedClip.id, { ...p, preset: "custom" })}
-      />
-      <p className="tool-hint">Double-click a wheel to reset. Bakes into curves on export.</p>
-      </InspSection>
+        <ColorWheelsRow
+          lift={selectedClip.color.lift ?? 0}
+          gamma={selectedClip.color.gamma ?? 0}
+          gain={selectedClip.color.gain ?? 0}
+          onChange={(p) => patchColor(selectedClip.id, { ...p, preset: "custom" })}
+        />
+      </PanelBlock>
+
+      <PanelBlock
+        title="Color wheel"
+        hint="Pick a tint. Recent colors are saved on this device."
+        filterMatch={inspMatch(ctx.inspSearch || "", "wheel", "hex", "recent", "tint", "hue")}
+      >
+        <HueColorWheel
+          onPick={(hex) => {
+            const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            if (!m) return;
+            const r = parseInt(m[1], 16) / 255;
+            const g = parseInt(m[2], 16) / 255;
+            const b = parseInt(m[3], 16) / 255;
+            const max = Math.max(r, g, b);
+            const min = Math.min(r, g, b);
+            const d = max - min;
+            let hue = 0;
+            if (d > 1e-6) {
+              if (max === r) hue = ((g - b) / d) % 6;
+              else if (max === g) hue = (b - r) / d + 2;
+              else hue = (r - g) / d + 4;
+              hue *= 60;
+              if (hue < 0) hue += 360;
+            }
+            const sat = max < 1e-6 ? 0 : d / max;
+            patchColor(selectedClip.id, {
+              hueShift: Math.round(hue > 180 ? hue - 360 : hue),
+              saturation: Math.min(3, 1 + sat * 0.85),
+              preset: "custom",
+            });
+          }}
+        />
+      </PanelBlock>
 
       <p className="tool-label">Color grading</p>
       <Slider
@@ -506,7 +601,7 @@ export function TransformPanel({ ctx }: { ctx: InspectorPanelCtx }) {
     setDefaultBezier,
   } = panelCtx(ctx);
   if (!selectedClip) {
-    return <p className="tool-hint">Select a clip on the timeline.</p>;
+    return <p className="tool-hint">Select a clip to move, scale, or fade it.</p>;
   }
   return (
     <div className="tool">
@@ -515,165 +610,146 @@ export function TransformPanel({ ctx }: { ctx: InspectorPanelCtx }) {
         const q = ctx.inspSearch || "";
         return (
           <>
-            <InspSection
-              id="xform-pos"
+            <PanelBlock
               title="Transform"
-              filterMatch={inspMatch(q, "transform", "position", "scale", "rotation", "opacity")}
+              hint="Move, size, spin, and fade the selected clip. Zero position is center."
+              filterMatch={inspMatch(q, "transform", "position", "scale", "move", "spin", "fade", "size")}
             >
-            <Slider
-              label="Position X"
-              min={-1}
-              max={1}
-              value={t.x}
-              onChange={(v) => patchTransform(selectedClip.id, { x: v })}
-            />
-            <Slider
-              label="Position Y"
-              min={-1}
-              max={1}
-              value={t.y}
-              onChange={(v) => patchTransform(selectedClip.id, { y: v })}
-            />
-            <Slider
-              label="Scale X"
-              min={0.1}
-              max={3}
-              value={t.scaleX}
-              onChange={(v) => patchTransform(selectedClip.id, { scaleX: v })}
-            />
-            <Slider
-              label="Scale Y"
-              min={0.1}
-              max={3}
-              value={t.scaleY}
-              onChange={(v) => patchTransform(selectedClip.id, { scaleY: v })}
-            />
-            <div className="chip-row">
+              <Slider
+                label="Move left · right"
+                hint="Negative = left, positive = right."
+                min={-1}
+                max={1}
+                value={t.x}
+                onChange={(v) => patchTransform(selectedClip.id, { x: v })}
+              />
+              <Slider
+                label="Move up · down"
+                hint="Negative = up, positive = down."
+                min={-1}
+                max={1}
+                value={t.y}
+                onChange={(v) => patchTransform(selectedClip.id, { y: v })}
+              />
+              <Slider
+                label="Size"
+                hint="Scale both sides together."
+                min={0.1}
+                max={3}
+                value={(t.scaleX + t.scaleY) / 2}
+                onChange={(v) => patchTransform(selectedClip.id, { scaleX: v, scaleY: v })}
+              />
+              <Slider
+                label="Spin"
+                hint="Degrees."
+                min={-180}
+                max={180}
+                value={t.rotation}
+                onChange={(v) => patchTransform(selectedClip.id, { rotation: v })}
+              />
+              <Slider
+                label="Fade"
+                hint="1 = solid, 0 = invisible."
+                min={0}
+                max={1}
+                value={t.opacity}
+                onChange={(v) => patchTransform(selectedClip.id, { opacity: v })}
+              />
               <button
-                className="chip"
+                type="button"
+                className="btn tiny wide"
                 onClick={() =>
-                  patchTransform(selectedClip.id, {
-                    scaleY: t.scaleX,
-                  })
+                  patchClip(selectedClip.id, { transform: { ...DEFAULT_TRANSFORM } })
                 }
               >
-                <span>Lock scale</span>
+                Reset
               </button>
-              <button
-                className="chip"
-                onClick={() =>
-                  patchTransform(selectedClip.id, {
-                    scaleX: 1,
-                    scaleY: 1,
-                  })
-                }
-              >
-                <span>100%</span>
-              </button>
-            </div>
-            <Slider
-              label="Rotation"
-              min={-180}
-              max={180}
-              value={t.rotation}
-              onChange={(v) => patchTransform(selectedClip.id, { rotation: v })}
-            />
-            <Slider
-              label="Opacity"
-              min={0}
-              max={1}
-              value={t.opacity}
-              onChange={(v) => patchTransform(selectedClip.id, { opacity: v })}
-            />
-            </InspSection>
+            </PanelBlock>
 
             <InspSection
               id="xform-kf"
-              title="Keyframes"
-              filterMatch={inspMatch(q, "keyframe", "animation", "ease", "bezier", "graph")}
+              title="Motion over time"
+              hint="Keyframes animate values between playhead points."
+              filterMatch={inspMatch(q, "keyframe", "animation", "ease", "bezier", "graph", "motion")}
+              defaultOpen={false}
             >
-            <div className="chip-row">
-              {(
-                [
-                  ["opacity", "Opacity"],
-                  ["x", "X"],
-                  ["y", "Y"],
-                  ["scaleX", "ScaleX"],
-                  ["scaleY", "ScaleY"],
-                  ["rotation", "Rot"],
-                ] as [KeyframeProp, string][]
-              ).map(([prop, label]) => (
+              <p className="tool-label">Add at playhead</p>
+              <div className="seg-row compact wrap">
+                {(
+                  [
+                    ["opacity", "Fade"],
+                    ["x", "X"],
+                    ["y", "Y"],
+                    ["scaleX", "W"],
+                    ["scaleY", "H"],
+                    ["rotation", "Spin"],
+                  ] as [KeyframeProp, string][]
+                ).map(([prop, label]) => (
+                  <button
+                    key={prop}
+                    type="button"
+                    className="seg-btn"
+                    onClick={() => addKeyframe(selectedClip.id, prop)}
+                    title={`Add ${label} keyframe`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="seg-row compact">
                 <button
-                  key={prop}
-                  className="chip"
-                  onClick={() => addKeyframe(selectedClip.id, prop)}
-                  title={`Add ${label} keyframe at playhead`}
+                  type="button"
+                  className="seg-btn"
+                  onClick={() => removeNearbyKeyframe(selectedClip.id)}
                 >
-                  <span>◆ {label}</span>
+                  Clear near
                 </button>
-              ))}
-            </div>
-            <div className="chip-row">
-              <button
-                className="chip"
-                onClick={() => removeNearbyKeyframe(selectedClip.id)}
-                title="Remove keyframe near playhead"
-              >
-                <span>◇ Clear near</span>
-              </button>
-              <button
-                className="chip"
-                onClick={() => copyKeyframes(selectedClip.id)}
-              >
-                <span>Copy KFs</span>
-              </button>
-              <button
-                className="chip"
-                onClick={() => pasteKeyframes(selectedClip.id)}
-              >
-                <span>Paste KFs</span>
-              </button>
-            </div>
-            <KeyframeGraph
-              keyframes={selectedClip.keyframes || []}
-              duration={clipLength(selectedClip)}
-            />
-            <p className="tool-label">Interpolation</p>
-            <div className="chip-row">
-              {KEYFRAME_EASES.map((e) => (
                 <button
-                  key={e.id}
-                  className={defaultEase === e.id ? "chip on" : "chip"}
-                  onClick={() => setAllKeyframeEase(selectedClip.id, e.id)}
-                  title="Apply ease to all keyframes on this clip"
+                  type="button"
+                  className="seg-btn"
+                  onClick={() => copyKeyframes(selectedClip.id)}
                 >
-                  <span>{e.label}</span>
+                  Copy
                 </button>
-              ))}
-            </div>
-            {defaultEase === "bezier" && (
-              <BezierEditor
-                value={defaultBezier}
-                onChange={(next) => {
-                  setDefaultBezier(next);
-                  setAllKeyframeEase(selectedClip.id, "bezier", next, true);
-                }}
+                <button
+                  type="button"
+                  className="seg-btn"
+                  onClick={() => pasteKeyframes(selectedClip.id)}
+                >
+                  Paste
+                </button>
+              </div>
+              <KeyframeGraph
+                keyframes={selectedClip.keyframes || []}
+                duration={clipLength(selectedClip)}
               />
-            )}
-                          <p className="tool-hint">
-                            {(selectedClip.keyframes || []).length} keyframe
-                            {(selectedClip.keyframes || []).length === 1 ? "" : "s"} · {defaultEase} ·
-                            drag diamonds · opacity/volume/x/y/scale/rotation/brightness bake on export
-                          </p>
+              <p className="tool-label">Easing</p>
+              <div className="seg-row compact wrap">
+                {KEYFRAME_EASES.map((e) => (
+                  <button
+                    key={e.id}
+                    type="button"
+                    className={defaultEase === e.id ? "seg-btn on" : "seg-btn"}
+                    onClick={() => setAllKeyframeEase(selectedClip.id, e.id)}
+                  >
+                    {e.label}
+                  </button>
+                ))}
+              </div>
+              {defaultEase === "bezier" && (
+                <BezierEditor
+                  value={defaultBezier}
+                  onChange={(next) => {
+                    setDefaultBezier(next);
+                    setAllKeyframeEase(selectedClip.id, "bezier", next, true);
+                  }}
+                />
+              )}
+              <p className="tool-hint">
+                {(selectedClip.keyframes || []).length} keyframe
+                {(selectedClip.keyframes || []).length === 1 ? "" : "s"} · {defaultEase}
+              </p>
             </InspSection>
-            <button
-              className="btn tiny wide"
-              onClick={() =>
-                patchClip(selectedClip.id, { transform: { ...DEFAULT_TRANSFORM } })
-              }
-            >
-              Reset transform
-            </button>
           </>
         );
       })()}
@@ -707,7 +783,7 @@ export function FxPanel({ ctx }: { ctx: InspectorPanelCtx }) {
         value={fxSearch}
         onChange={(e) => setFxSearch(e.target.value)}
       />
-      <div className="fx-library">
+      <div className="cc-grid cc-grid-3">
         {EFFECT_DEFS.filter(
           (d) =>
             !fxSearch.trim() ||
@@ -716,12 +792,15 @@ export function FxPanel({ ctx }: { ctx: InspectorPanelCtx }) {
         ).map((d) => (
           <button
             key={d.kind}
-            className="fx-add"
+            type="button"
+            className="cc-card fx-photo-card"
             onClick={() => addEffect(selectedClip.id, d.kind)}
             title={d.hint}
           >
-            <span className="fx-add-label">{d.label}</span>
-            <span className="fx-add-plus">＋</span>
+            <span className="cc-card-thumb">
+              <EffectPreview kind={d.kind} />
+            </span>
+            <span className="cc-card-label">{d.label}</span>
           </button>
         ))}
       </div>
@@ -824,6 +903,8 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
     detachClipAudio,
     relinkClipAudio,
     onMusicFile,
+    onExtractAudioFromVideo,
+    onImportYoutubeAudio,
     pushToast,
     markers,
     addMarker,
@@ -833,10 +914,10 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   } = panelCtx(ctx);
   return (
     <div className="tool">
-                      <InspSection
-                        id="mixer"
+                      <PanelBlock
                         title="Mixer"
-                        filterMatch={inspMatch(ctx.inspSearch || "", "mixer", "bus", "fader")}
+                        hint="Faders for the selected clip, music, and SFX. Solo hears one bus."
+                        filterMatch={inspMatch(ctx.inspSearch || "", "mixer", "bus", "fader", "audio", "volume")}
                       >
                         <AudioMixerStrip
                           channels={[
@@ -905,15 +986,16 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                             })),
                           ]}
                         />
-                      </InspSection>
+                      </PanelBlock>
                       {selectedClip && selectedAsset?.kind !== "image" && (
-                        <InspSection
-                          id="clip-audio"
+                        <PanelBlock
                           title="Clip audio"
-                          filterMatch={inspMatch(ctx.inspSearch || "", "volume", "eq", "bass", "gate", "compress")}
+                          hint="Loudness, tone, and cleanup for this clip’s own sound."
+                          filterMatch={inspMatch(ctx.inspSearch || "", "volume", "eq", "bass", "gate", "compress", "audio", "fade")}
                         >
                           <Slider
                             label="Volume"
+                            hint="0 = mute, 1 = normal, above 1 = boost."
                             min={0}
                             max={2}
                             value={selectedClip.volume}
@@ -926,9 +1008,10 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           >
                             ◆ Volume keyframe
                           </button>
-                          <p className="tool-label">EQ & balance</p>
+                          <p className="tool-label">Tone</p>
                           <Slider
                             label="Bass"
+                            hint="Low frequencies."
                             min={-20}
                             max={20}
                             value={selectedClip.bass ?? 0}
@@ -936,6 +1019,7 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           />
                           <Slider
                             label="Treble"
+                            hint="High frequencies."
                             min={-20}
                             max={20}
                             value={selectedClip.treble ?? 0}
@@ -943,6 +1027,7 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           />
                           <Slider
                             label="Balance"
+                            hint="−1 left, 0 center, +1 right."
                             min={-1}
                             max={1}
                             value={selectedClip.balance ?? 0}
@@ -958,9 +1043,10 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                               }
                             />
                           </label>
-                          <p className="tool-label">Dynamics</p>
+                          <p className="tool-label">Cleanup</p>
                           <Slider
                             label="Compressor"
+                            hint="Evens out loud and quiet parts."
                             min={0}
                             max={1}
                             value={selectedClip.compress ?? 0}
@@ -968,6 +1054,7 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           />
                           <Slider
                             label="Denoise"
+                            hint="Reduces hiss and background noise."
                             min={0}
                             max={1}
                             value={selectedClip.denoise ?? 0}
@@ -975,6 +1062,7 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           />
                           <Slider
                             label="Noise gate"
+                            hint="Cuts sound below a threshold (room tone)."
                             min={0}
                             max={1}
                             value={selectedClip.gate ?? 0}
@@ -990,14 +1078,14 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                               }
                             />
                           </label>
-                          <p className="tool-hint">EQ / dynamics bake into export.</p>
+                          <p className="tool-hint">These bake into export.</p>
                           {selectedAsset?.kind === "video" && selectedAsset.hasAudio && (
                             <button
                               className="btn tiny wide"
                               onClick={() => detachClipAudio(selectedClip.id)}
                               title="Move this clip's audio to the music lane (linked)"
                             >
-                              ⤴ Detach audio (linked)
+                              Detach audio
                             </button>
                           )}
                           {music?.linkedClipId === selectedClip.id && (
@@ -1006,11 +1094,12 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                               onClick={() => relinkClipAudio(selectedClip.id)}
                               title="Restore audio onto the clip"
                             >
-                              ⤵ Re-link audio to clip
+                              Re-link audio
                             </button>
                           )}
                           <Slider
                             label="Fade in"
+                            hint="Soft start in seconds."
                             min={0}
                             max={3}
                             value={selectedClip.fadeIn}
@@ -1018,12 +1107,13 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           />
                           <Slider
                             label="Fade out"
+                            hint="Soft end in seconds."
                             min={0}
                             max={3}
                             value={selectedClip.fadeOut}
                             onChange={(v) => patchClip(selectedClip.id, { fadeOut: v })}
                           />
-                        </InspSection>
+                        </PanelBlock>
                       )}
 
                       <InspSection
@@ -1099,20 +1189,46 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           />
                           <p className="tool-hint">Drag the music bar on the timeline to move or trim it.</p>
                         </>
-                      ) : (
+                      ) : null}
+                      <div className="audio-import-stack">
+                        <p className="tool-label">{music ? "Add more audio" : "Add audio"}</p>
                         <label className="btn wide">
-                          {uploadingMusic ? "Uploading…" : "♪ Add background track"}
+                          {uploadingMusic ? "Uploading…" : "Audio file"}
                           <input
                             type="file"
                             accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg"
                             hidden
+                            disabled={uploadingMusic}
                             onChange={(e) => {
                               const f = e.target.files?.[0];
                               if (f) onMusicFile(f);
+                              e.target.value = "";
                             }}
                           />
                         </label>
-                      )}
+                        {onExtractAudioFromVideo && (
+                          <label className="btn wide ghost">
+                            {uploadingMusic ? "Working…" : "Extract from video"}
+                            <input
+                              type="file"
+                              accept="video/*,.mp4,.mov,.webm,.mkv,.m4v"
+                              hidden
+                              disabled={uploadingMusic}
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) void onExtractAudioFromVideo(f);
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                        )}
+                        {onImportYoutubeAudio && (
+                          <YoutubeAudioImport
+                            busy={uploadingMusic}
+                            onImport={onImportYoutubeAudio}
+                          />
+                        )}
+                      </div>
                       {music && (
                         <>
                           <p className="tool-label">Extra music lanes ({musicTracks.length})</p>
@@ -1271,453 +1387,6 @@ export function AudioPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   );
 }
 
-export function TextPanel({ ctx }: { ctx: InspectorPanelCtx }) {
-  const {
-    selectedText,
-    assets,
-    projectId,
-    addText,
-    addSticker,
-    addPackSticker,
-    patchText,
-    deleteText,
-    setAssets,
-    pushToast,
-  } = panelCtx(ctx);
-  return (
-    <div className="tool">
-                      <InspSection id="text-add" title="Add text & stickers" filterMatch={inspMatch(ctx.inspSearch || "", "text", "sticker", "lottie")}>
-                      <button className="btn wide primary" onClick={addText}>
-                        ＋ Add text block
-                      </button>
-                      <p className="tool-label">Stickers</p>
-                      <p className="tool-hint">
-                        Shift-click an image in the media bin to place as V2 sticker/overlay.
-                      </p>
-                      <div className="sticker-grid">
-                        {STICKER_PRESETS.map((s) => (
-                          <button
-                            key={s.id}
-                            className="sticker-btn"
-                            title={s.label}
-                            onClick={() => addSticker(s.glyph)}
-                          >
-                            {s.glyph}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="tool-label">SVG / motion pack</p>
-                      <div className="sticker-pack-grid">
-                        {STICKER_PACK.map((s) => (
-                          <button
-                            key={s.id}
-                            className="sticker-pack-btn"
-                            title={
-                              s.lottie
-                                ? `${s.label} (Lottie)`
-                                : s.motion
-                                  ? `${s.label} (motion)`
-                                  : s.label
-                            }
-                            onClick={() => addPackSticker?.(s.src, s.label)}
-                          >
-                            {s.lottie ? (
-                              <span style={{ fontSize: 18 }}>{s.label.slice(0, 1)}</span>
-                            ) : (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={s.src} alt={s.label} />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                      </InspSection>
-                      {selectedText ? (
-                        <>
-                          <InspSection id="text-style" title="Content & style" filterMatch={inspMatch(ctx.inspSearch || "", "font", "color", "template", "curve", "kerning")}>
-                          <label className="field">
-                            <span>Text</span>
-                            <textarea
-                              rows={2}
-                              value={selectedText.text}
-                              onChange={(e) => patchText(selectedText.id, { text: e.target.value })}
-                            />
-                          </label>
-                          <p className="tool-label">Templates</p>
-                          <div className="chip-row">
-                            {TEXT_TEMPLATES.map((tpl) => (
-                              <button
-                                key={tpl.id}
-                                className="chip"
-                                onClick={() => patchText(selectedText.id, tpl.apply)}
-                                title={`Apply ${tpl.label} preset`}
-                              >
-                                <span>{tpl.label}</span>
-                              </button>
-                            ))}
-                          </div>
-                          <label className="field row">
-                            <span>Font</span>
-                            <select
-                              value={
-                                selectedText.fontFile
-                                  ? `file:${selectedText.fontFile}`
-                                  : selectedText.font || "Arial Black"
-                              }
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                if (v.startsWith("file:")) {
-                                  const filename = v.slice(5);
-                                  const a = assets.find((x) => x.filename === filename);
-                                  const name = a?.name.replace(/\.[^.]+$/, "") || "Custom";
-                                  patchText(selectedText.id, {
-                                    fontFile: filename,
-                                    font: name,
-                                  });
-                                } else {
-                                  patchText(selectedText.id, {
-                                    font: v,
-                                    fontFile: undefined,
-                                  });
-                                }
-                              }}
-                            >
-                              {TEXT_FONTS.map((f) => (
-                                <option key={f} value={f}>
-                                  {f}
-                                </option>
-                              ))}
-                              {assets
-                                .filter((a) => a.kind === "font")
-                                .map((a) => (
-                                  <option key={a.id} value={`file:${a.filename}`}>
-                                    ↑ {a.name}
-                                  </option>
-                                ))}
-                            </select>
-                          </label>
-                          <label className="btn tiny wide">
-                            Upload font (.ttf / .otf)
-                            <input
-                              type="file"
-                              accept=".ttf,.otf,.woff,.woff2"
-                              hidden
-                              onChange={async (e) => {
-                                const f = e.target.files?.[0];
-                                if (!f) return;
-                                const form = new FormData();
-                                form.append("file", f);
-                                const res = await fetch(`/api/editor/project/${projectId}/asset`, {
-                                  method: "POST",
-                                  body: form,
-                                });
-                                const data = await res.json();
-                                if (!res.ok) {
-                                  pushToast(data.error || "Font upload failed", "error");
-                                  return;
-                                }
-                                const asset = data.asset as ProjectAsset;
-                                setAssets((prev) => [...prev, asset]);
-                                patchText(selectedText.id, {
-                                  fontFile: asset.filename,
-                                  font: asset.name.replace(/\.[^.]+$/, ""),
-                                });
-                                pushToast("Font applied", "success");
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                          <Slider
-                            label="Font size"
-                            min={0.03}
-                            max={0.25}
-                            value={selectedText.size}
-                            onChange={(v) => patchText(selectedText.id, { size: v })}
-                          />
-                          <label className="field row">
-                            <span>Color</span>
-                            <input
-                              type="color"
-                              value={selectedText.color}
-                              onChange={(e) => patchText(selectedText.id, { color: e.target.value })}
-                            />
-                          </label>
-                          <div className="seg-row">
-                            <span>Align</span>
-                            <div className="chip-row">
-                              {(["left", "center", "right"] as TextAlign[]).map((al) => (
-                                <button
-                                  key={al}
-                                  className={selectedText.align === al ? "chip on" : "chip"}
-                                  onClick={() => patchText(selectedText.id, { align: al })}
-                                >
-                                  <span>{al}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="seg-row">
-                            <span>Animation</span>
-                            <div className="chip-row">
-                              {(["none", "fade", "slide"] as TextAnim[]).map((an) => (
-                                <button
-                                  key={an}
-                                  className={selectedText.anim === an ? "chip on" : "chip"}
-                                  onClick={() => patchText(selectedText.id, { anim: an })}
-                                >
-                                  <span>{an}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          <label className="seg-row">
-                            <span>Bold</span>
-                            <input
-                              type="checkbox"
-                              checked={selectedText.bold}
-                              onChange={(e) => patchText(selectedText.id, { bold: e.target.checked })}
-                            />
-                          </label>
-                          <label className="seg-row">
-                            <span>Italic</span>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(selectedText.italic)}
-                              onChange={(e) => patchText(selectedText.id, { italic: e.target.checked })}
-                            />
-                          </label>
-                          <label className="seg-row">
-                            <span>Underline</span>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(selectedText.underline)}
-                              onChange={(e) => patchText(selectedText.id, { underline: e.target.checked })}
-                            />
-                          </label>
-                          <Slider
-                            label="Curve"
-                            min={-100}
-                            max={100}
-                            value={selectedText.curve ?? 0}
-                            onChange={(v) => patchText(selectedText.id, { curve: v })}
-                          />
-                          <p className="tool-hint">Bend text along an SVG arc (− / +).</p>
-                          <Slider
-                            label="Kerning"
-                            min={-20}
-                            max={40}
-                            value={selectedText.kerning ?? 0}
-                            onChange={(v) => patchText(selectedText.id, { kerning: v })}
-                          />
-                          <p className="tool-hint">Extra glyph spacing on top of letter spacing.</p>
-                          </InspSection>
-                          <InspSection id="text-runs" title="Rich runs" defaultOpen={false} filterMatch={inspMatch(ctx.inspSearch || "", "runs", "rich")}>
-                          <p className="tool-label">Rich runs</p>
-                          <button
-                            className="btn tiny wide"
-                            onClick={() => {
-                              const parts = selectedText.text.split(/(\s+)/).filter(Boolean);
-                              if (parts.length < 2) {
-                                pushToast("Type more words to split into runs", "info");
-                                return;
-                              }
-                              patchText(selectedText.id, {
-                                runs: parts.map((p, i) => ({
-                                  text: p,
-                                  bold: selectedText.bold,
-                                  italic: i % 2 === 1 ? true : selectedText.italic,
-                                  color: selectedText.color,
-                                })),
-                              });
-                              pushToast("Split into styled runs", "success");
-                            }}
-                          >
-                            Split words into styled runs
-                          </button>
-                          {(selectedText.runs || []).map((r, i) => (
-                            <div key={i} className="marker-row" style={{ gridTemplateColumns: "1fr auto auto auto" }}>
-                              <input
-                                value={r.text}
-                                onChange={(e) => {
-                                  const runs = [...(selectedText.runs || [])];
-                                  runs[i] = { ...runs[i], text: e.target.value };
-                                  patchText(selectedText.id, {
-                                    runs,
-                                    text: runs.map((x) => x.text).join(""),
-                                  });
-                                }}
-                              />
-                              <button
-                                className={r.bold ? "chip on" : "chip"}
-                                onClick={() => {
-                                  const runs = [...(selectedText.runs || [])];
-                                  runs[i] = { ...runs[i], bold: !r.bold };
-                                  patchText(selectedText.id, { runs });
-                                }}
-                              >
-                                <span>B</span>
-                              </button>
-                              <button
-                                className={r.italic ? "chip on" : "chip"}
-                                onClick={() => {
-                                  const runs = [...(selectedText.runs || [])];
-                                  runs[i] = { ...runs[i], italic: !r.italic };
-                                  patchText(selectedText.id, { runs });
-                                }}
-                              >
-                                <span>I</span>
-                              </button>
-                              <input
-                                type="color"
-                                value={r.color || selectedText.color}
-                                onChange={(e) => {
-                                  const runs = [...(selectedText.runs || [])];
-                                  runs[i] = { ...runs[i], color: e.target.value };
-                                  patchText(selectedText.id, { runs });
-                                }}
-                                aria-label="Run color"
-                              />
-                            </div>
-                          ))}
-                          {selectedText.runs?.length ? (
-                            <button
-                              className="btn tiny"
-                              onClick={() =>
-                                patchText(selectedText.id, {
-                                  runs: undefined,
-                                  text: selectedText.runs!.map((x) => x.text).join(""),
-                                })
-                              }
-                            >
-                              Clear runs
-                            </button>
-                          ) : null}
-                          </InspSection>
-                          <InspSection id="text-fx" title="Outline · shadow · layout" filterMatch={inspMatch(ctx.inspSearch || "", "outline", "shadow", "stroke", "layout", "opacity")}>
-                          <div className="seg-row">
-                            <span>Case</span>
-                            <div className="chip-row">
-                              {([
-                                ["none", "Aa"],
-                                ["upper", "AA"],
-                                ["lower", "aa"],
-                              ] as [TextTransform, string][]).map(([tf, lbl]) => (
-                                <button
-                                  key={tf}
-                                  className={(selectedText.transform || "none") === tf ? "chip on" : "chip"}
-                                  onClick={() => patchText(selectedText.id, { transform: tf })}
-                                >
-                                  <span>{lbl}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-
-                          <p className="tool-label">Outline</p>
-                          <Slider
-                            label="Stroke width"
-                            min={0}
-                            max={16}
-                            value={selectedText.stroke ?? 0}
-                            onChange={(v) => patchText(selectedText.id, { stroke: v })}
-                          />
-                          <label className="field row">
-                            <span>Stroke color</span>
-                            <input
-                              type="color"
-                              value={selectedText.strokeColor || "#000000"}
-                              onChange={(e) => patchText(selectedText.id, { strokeColor: e.target.value })}
-                            />
-                          </label>
-
-                          <p className="tool-label">Shadow</p>
-                          <Slider
-                            label="Shadow depth"
-                            min={0}
-                            max={16}
-                            value={selectedText.shadow ?? 0}
-                            onChange={(v) => patchText(selectedText.id, { shadow: v })}
-                          />
-                          <label className="field row">
-                            <span>Shadow color</span>
-                            <input
-                              type="color"
-                              value={selectedText.shadowColor || "#000000"}
-                              onChange={(e) => patchText(selectedText.id, { shadowColor: e.target.value })}
-                            />
-                          </label>
-
-                          <label className="seg-row">
-                            <span>Background</span>
-                            <input
-                              type="checkbox"
-                              checked={!!selectedText.bg}
-                              onChange={(e) => patchText(selectedText.id, { bg: e.target.checked })}
-                            />
-                          </label>
-                          {selectedText.bg && (
-                            <>
-                              <label className="field row">
-                                <span>Box color</span>
-                                <input
-                                  type="color"
-                                  value={selectedText.bgColor || "#000000"}
-                                  onChange={(e) => patchText(selectedText.id, { bgColor: e.target.value })}
-                                />
-                              </label>
-                              <Slider
-                                label="Box opacity"
-                                min={0}
-                                max={1}
-                                value={selectedText.bgOpacity ?? 0.6}
-                                onChange={(v) => patchText(selectedText.id, { bgOpacity: v })}
-                              />
-                            </>
-                          )}
-
-                          <p className="tool-label">Layout</p>
-                          <Slider
-                            label="Text opacity"
-                            min={0}
-                            max={1}
-                            value={selectedText.opacity ?? 1}
-                            onChange={(v) => patchText(selectedText.id, { opacity: v })}
-                          />
-                          <Slider
-                            label="Letter spacing"
-                            min={0}
-                            max={40}
-                            value={selectedText.letterSpacing ?? 0}
-                            onChange={(v) => patchText(selectedText.id, { letterSpacing: v })}
-                          />
-                          <Slider
-                            label="Line height"
-                            min={0.8}
-                            max={2}
-                            value={selectedText.lineHeight ?? 1.1}
-                            onChange={(v) => patchText(selectedText.id, { lineHeight: v })}
-                          />
-                          <Slider
-                            label="Duration"
-                            min={0.5}
-                            max={20}
-                            value={selectedText.duration}
-                            onChange={(v) => patchText(selectedText.id, { duration: v })}
-                          />
-                          <p className="tool-hint">
-                            Drag the block on the text lane to move it, or drag its edges to resize.
-                          </p>
-                          <button className="btn tiny danger" onClick={() => deleteText(selectedText.id)}>
-                            Delete text
-                          </button>
-                          </InspSection>
-                        </>
-                      ) : (
-                        <p className="tool-hint">Add a text block, then select it on the text lane to style it.</p>
-                      )}
-                    </div>
-  );
-}
-
 export function TransitionsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   const {
     selectedClip,
@@ -1734,8 +1403,11 @@ export function TransitionsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   return (
     <div className="tool">
                       <InspSection id="tr-preview" title="Transition browser" filterMatch={inspMatch(ctx.inspSearch || "", "transition", "preview", "crossfade")}>
-                      <p className="tool-label">Transition preview</p>
-                      <TransitionDemo kind={previewTransition} replayKey={demoKey} />
+                      <p className="tool-hint">
+                        {selectedClip
+                          ? "Each card previews with two photos — click to apply on the selected clip."
+                          : "Select a clip, then click a transition."}
+                      </p>
                       <input
                         className="fx-search"
                         placeholder="Search transitions…"
@@ -1768,46 +1440,34 @@ export function TransitionsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                           </div>
                         </>
                       )}
-                      <div className="chip-row">
+                      <div className="cc-grid cc-grid-3">
                         {TRANSITIONS.filter(
                           (t) =>
                             t.id !== "none" &&
                             (!trSearch.trim() || t.label.toLowerCase().includes(trSearch.toLowerCase())),
-                        ).map((tr) => (
-                          <TransitionChip
-                            key={tr.id}
-                            tr={tr}
-                            active={
-                              previewTransition === tr.id ||
-                              selectedClip?.transition === tr.id
-                            }
-                            fav={favTr.includes(tr.id)}
-                            onPick={() => {
-                              setPreviewTransition(tr.id);
-                              setDemoKey((k) => k + 1);
-                              if (selectedClip) {
-                                patchClip(selectedClip.id, { transition: tr.id });
-                              } else {
-                                // preview only when nothing selected
-                              }
-                            }}
-                            onFav={() => toggleFav(tr.id)}
-                          />
-                        ))}
-                      </div>
-                      <div className="apply-row">
-                        <button
-                          className="btn tiny"
-                          onClick={() => setDemoKey((k) => k + 1)}
-                          title="Replay preview"
-                        >
-                          ↻ Replay
-                        </button>
-                        <p className="tool-hint">
-                          {selectedClip
-                            ? "Click a transition to apply it."
-                            : "Select a clip, then click a transition."}
-                        </p>
+                        ).map((tr) => {
+                          const active =
+                            previewTransition === tr.id || selectedClip?.transition === tr.id;
+                          return (
+                            <button
+                              key={tr.id}
+                              type="button"
+                              className={active ? "cc-card fx-photo-card on" : "cc-card fx-photo-card"}
+                              onClick={() => {
+                                setPreviewTransition(tr.id);
+                                setDemoKey((k) => k + 1);
+                                if (selectedClip) {
+                                  patchClip(selectedClip.id, { transition: tr.id });
+                                }
+                              }}
+                            >
+                              <span className="cc-card-thumb">
+                                <TransitionPreview kind={tr.id} />
+                              </span>
+                              <span className="cc-card-label">{tr.label}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                       </InspSection>
 
@@ -1884,15 +1544,242 @@ export function InspectorClipActions({ ctx }: { ctx: InspectorPanelCtx }) {
   );
 }
 
-/** Clip basics — speed, opacity, transition length, lane actions. */
+function ClipLayersSection({ ctx }: { ctx: InspectorPanelCtx }) {
+  const {
+    selectedClip,
+    selectedAsset,
+    assets,
+    assetById,
+    addClipLayer,
+    uploadClipLayerFile,
+    renameClipLayer,
+    removeClipLayer,
+    thumbUrl,
+  } = panelCtx(ctx);
+  const [layerSearch, setLayerSearch] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const layers = selectedClip?.layers || [];
+  const nextNum = layers.length + 1;
+  const q = layerSearch.trim().toLowerCase();
+  const mediaAssets = assets.filter((a) => a.kind === "video" || a.kind === "image");
+
+  if (!selectedClip || !addClipLayer) return null;
+
+  const base = {
+    id: "__base",
+    name: selectedAsset?.filename?.replace(/\.[^.]+$/, "") || "Base",
+    assetId: selectedClip.assetId || undefined,
+    enabled: true as boolean | undefined,
+    isBase: true as const,
+    index: 1,
+  };
+  const extras = layers.map((l, i) => ({
+    ...l,
+    isBase: false as const,
+    index: i + 2,
+  }));
+  const rows = [base, ...extras].filter(
+    (r) => !q || r.name.toLowerCase().includes(q) || `layer #${r.index}`.includes(q),
+  );
+
+  function beginAdd() {
+    setDraftName(`Layer #${nextNum}`);
+    setPicking(true);
+  }
+
+  async function addFromAsset(assetId: string) {
+    addClipLayer(selectedClip.id, assetId, draftName.trim() || `Layer #${nextNum}`);
+    setPicking(false);
+    setDraftName("");
+  }
+
+  async function addFromFile(file: File | undefined) {
+    if (!file || !uploadClipLayerFile) return;
+    setBusy(true);
+    try {
+      await uploadClipLayerFile(
+        selectedClip.id,
+        file,
+        draftName.trim() || `Layer #${nextNum}`,
+      );
+      setPicking(false);
+      setDraftName("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <PanelBlock
+      title={`Layers · ${1 + layers.length}`}
+      hint="Stack video or photos on this clip. Every new layer needs real media from a file or the library."
+      filterMatch={inspMatch(ctx.inspSearch || "", "layer", "overlay", "stack")}
+    >
+      <div className="clip-layers">
+        <div className="clip-layers-toolbar">
+          <input
+            className="clip-layers-search"
+            placeholder="Search layers…"
+            value={layerSearch}
+            onChange={(e) => setLayerSearch(e.target.value)}
+            aria-label="Search layers"
+          />
+          <button
+            type="button"
+            className="clip-layer-icon-btn add"
+            title="Add layer from file or library"
+            onClick={beginAdd}
+          >
+            +
+          </button>
+        </div>
+
+        {picking && (
+          <div className="clip-layer-picker">
+            <input
+              className="clip-layer-name-input"
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              placeholder={`Layer #${nextNum}`}
+              aria-label="New layer name"
+            />
+            <label className={`btn tiny${busy ? " disabled" : ""}`}>
+              {busy ? "Uploading…" : "From file"}
+              <input
+                type="file"
+                accept="video/*,image/*"
+                hidden
+                disabled={busy}
+                onChange={(e) => {
+                  void addFromFile(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn tiny ghost"
+              onClick={() => {
+                setPicking(false);
+                setDraftName("");
+              }}
+            >
+              Cancel
+            </button>
+            <p className="tool-hint">Or pick from library:</p>
+            <div className="clip-layer-lib">
+              {mediaAssets.length === 0 ? (
+                <p className="tool-hint">No media yet — use From file.</p>
+              ) : (
+                mediaAssets.map((a) => {
+                  const thumb = thumbUrl
+                    ? thumbUrl(a, 0, 64)
+                    : a.kind === "image" && ctx.assetUrl
+                      ? ctx.assetUrl(a)
+                      : null;
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className="clip-layer-lib-card"
+                      title={a.filename}
+                      onClick={() => void addFromAsset(a.id)}
+                    >
+                      {thumb ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={thumb} alt="" draggable={false} />
+                      ) : (
+                        <span>{a.kind === "image" ? "IMG" : "VID"}</span>
+                      )}
+                      <em>{a.filename.replace(/\.[^.]+$/, "").slice(0, 16)}</em>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="clip-layers-list">
+          {rows.length === 0 ? (
+            <p className="tool-hint">No layers match.</p>
+          ) : (
+            rows.map((row) => {
+              const asset = row.assetId ? assetById.get(row.assetId) : null;
+              const thumb =
+                asset && thumbUrl
+                  ? thumbUrl(asset, 0, 72)
+                  : asset?.kind === "image" && ctx.assetUrl
+                    ? ctx.assetUrl(asset)
+                    : null;
+              return (
+                <div
+                  key={row.id}
+                  className={`clip-layer-row${row.enabled === false ? " off" : ""}${row.isBase ? " base" : ""}`}
+                >
+                  <span className="clip-layer-num" title={`Layer ${row.index}`}>
+                    {row.index}
+                  </span>
+                  <div className="clip-layer-thumb" title={asset?.filename || row.name}>
+                    {thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={thumb} alt="" draggable={false} />
+                    ) : (
+                      <span className="clip-layer-thumb-empty">{row.index}</span>
+                    )}
+                  </div>
+                  <div className="clip-layer-meta">
+                    {row.isBase ? (
+                      <span className="clip-layer-label">{row.name}</span>
+                    ) : (
+                      <input
+                        className="clip-layer-label-input"
+                        value={row.name}
+                        onChange={(e) => renameClipLayer?.(selectedClip.id, row.id, e.target.value)}
+                        aria-label="Layer name"
+                      />
+                    )}
+                    <span className="clip-layer-sub">
+                      {asset
+                        ? `${asset.kind === "image" ? "Photo" : "Video"} · ${asset.filename}`
+                        : row.isBase
+                          ? "Base clip"
+                          : "No media"}
+                    </span>
+                  </div>
+                  {!row.isBase && (
+                    <button
+                      type="button"
+                      className="clip-layer-icon-btn del"
+                      title="Delete layer"
+                      onClick={() => removeClipLayer?.(selectedClip.id, row.id)}
+                    >
+                      −
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </PanelBlock>
+  );
+}
+
+/** Clip tab — layers only. */
 export function ClipPanel({ ctx }: { ctx: InspectorPanelCtx }) {
-  const { selectedClip, selectedText, patchClip, patchText } = panelCtx(ctx);
+  const { selectedClip, selectedText, patchText } = panelCtx(ctx);
   if (selectedText && !selectedClip) {
     return (
       <div className="tool">
-        <p className="tool-hint">Text layer selected — edit in the Text library tab.</p>
+        <p className="tool-hint">Text selected — edit it in the Text tab.</p>
         <Slider
           label="Start"
+          hint="When the title appears on the timeline."
           min={0}
           max={120}
           value={selectedText.start}
@@ -1900,6 +1787,7 @@ export function ClipPanel({ ctx }: { ctx: InspectorPanelCtx }) {
         />
         <Slider
           label="Duration"
+          hint="How long the title stays on screen."
           min={0.2}
           max={60}
           value={selectedText.duration}
@@ -1911,81 +1799,107 @@ export function ClipPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   if (!selectedClip) {
     return (
       <div className="tool">
-        <p className="tool-hint">Select a clip on the timeline to edit its properties.</p>
-        {ctx.addAdjustmentLayer && (
-          <button className="btn tiny wide" onClick={ctx.addAdjustmentLayer}>
-            Add adjustment layer
-          </button>
-        )}
+        <p className="tool-hint">Select a clip to manage its layers.</p>
       </div>
     );
   }
   return (
     <div className="tool">
-      <InspSection id="clip-basic" title="Clip" filterMatch={inspMatch(ctx.inspSearch || "", "speed", "opacity", "clip")}>
-        <Slider
-          label="Speed"
-          min={0.1}
-          max={4}
-          value={selectedClip.speed || 1}
-          onChange={(v) => patchClip(selectedClip.id, { speed: v })}
-        />
-        {ctx.applySpeedRamp && (
-          <div className="chip-row" style={{ marginBottom: "0.45rem" }}>
-            {(
-              [
-                ["ramp-in", "Ramp in"],
-                ["ramp-out", "Ramp out"],
-                ["slow-mo", "Slow-mo"],
-              ] as const
-            ).map(([kind, label]) => (
-              <button
-                key={kind}
-                type="button"
-                className="chip"
-                onClick={() => ctx.applySpeedRamp?.(selectedClip.id, kind)}
-              >
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <Slider
-          label="Opacity"
-          min={0}
-          max={1}
-          value={selectedClip.transform?.opacity ?? 1}
-          onChange={(v) =>
-            patchClip(selectedClip.id, {
-              transform: {
-                ...DEFAULT_TRANSFORM,
-                ...(selectedClip.transform || {}),
-                opacity: v,
-              },
-            })
-          }
-        />
-        {selectedClip.transition !== "none" && (
-          <Slider
-            label="Transition length"
-            min={0.05}
-            max={2}
-            value={selectedClip.transitionDuration || 0.5}
-            onChange={(v) => patchClip(selectedClip.id, { transitionDuration: v })}
-          />
-        )}
+      <ClipLayersSection ctx={ctx} />
+    </div>
+  );
+}
+
+export function ExtraOptionsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
+  const {
+    useProxy = true,
+    onToggleProxy,
+    snapEnabled = true,
+    setSnapEnabled,
+    magnetic = false,
+    setMagnetic,
+    rippleEnabled = false,
+    setRippleEnabled,
+    freeV1 = false,
+    onToggleFreeV1,
+  } = panelCtx(ctx);
+
+  const toggles: {
+    id: string;
+    label: string;
+    hint: string;
+    on: boolean;
+    set?: () => void;
+  }[] = [
+    {
+      id: "proxy",
+      label: "Proxy preview",
+      hint: "Lighter files while scrubbing. Off = full quality in the monitor.",
+      on: useProxy,
+      set: onToggleProxy,
+    },
+    {
+      id: "snap",
+      label: "Snap",
+      hint: "Clip edges pull to nearby clips and the playhead.",
+      on: snapEnabled,
+      set: setSnapEnabled ? () => setSnapEnabled((s) => !s) : undefined,
+    },
+    {
+      id: "magnet",
+      label: "Magnet",
+      hint: "Stronger snap while dragging; gaps tend to close on release.",
+      on: magnetic,
+      set: setMagnetic ? () => setMagnetic((m) => !m) : undefined,
+    },
+    {
+      id: "ripple",
+      label: "Ripple",
+      hint: "Deleting or shortening slides later clips left to close gaps.",
+      on: rippleEnabled,
+      set: setRippleEnabled ? () => setRippleEnabled((r) => !r) : undefined,
+    },
+    {
+      id: "free",
+      label: freeV1 ? "Free place (V1)" : "Pack gapless (V1)",
+      hint: "Free lets main-track clips sit anywhere. Pack keeps them back-to-back.",
+      on: freeV1,
+      set: onToggleFreeV1,
+    },
+  ];
+
+  return (
+    <div className="tool">
+      <InspSection
+        id="extra-opts"
+        title="Extra options"
+        hint="Timeline behavior that used to crowd the bottom bar — toggle what you need."
+        filterMatch={inspMatch(ctx.inspSearch || "", "proxy", "snap", "magnet", "ripple", "extra")}
+      >
+        <div className="extra-opts-list">
+          {toggles.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={t.on ? "extra-opt on" : "extra-opt"}
+              onClick={() => t.set?.()}
+              disabled={!t.set}
+            >
+              <span className="extra-opt-top">
+                <strong>{t.label}</strong>
+                <em>{t.on ? "On" : "Off"}</em>
+              </span>
+              <span className="extra-opt-hint">{t.hint}</span>
+            </button>
+          ))}
+        </div>
       </InspSection>
-      <InspectorClipActions ctx={ctx} />
     </div>
   );
 }
 
 export function InspectorTabPanels({ ctx }: { ctx: InspectorPanelCtx }) {
   const { tab } = ctx;
-  /**
-   * Inspector (right): clip | transform | color | audio | effects | animation
-   * Sidebar still mounts text | transitions | fx via the same switch.
-   */
   if (tab === "clip") return <ClipPanel ctx={ctx} />;
   if (tab === "transform" || tab === "animation") return <TransformPanel ctx={ctx} />;
   if (tab === "color") return <EffectsPanel ctx={ctx} />;
@@ -1993,5 +1907,6 @@ export function InspectorTabPanels({ ctx }: { ctx: InspectorPanelCtx }) {
   if (tab === "effects" || tab === "fx") return <FxPanel ctx={ctx} />;
   if (tab === "text") return <TextPanel ctx={ctx} />;
   if (tab === "transitions") return <TransitionsPanel ctx={ctx} />;
+  if (tab === "extra") return <ExtraOptionsPanel ctx={ctx} />;
   return <ClipPanel ctx={ctx} />;
 }

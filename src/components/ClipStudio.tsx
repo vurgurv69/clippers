@@ -94,6 +94,7 @@ export function ClipStudio() {
   const [exportCodec, setExportCodec] = useState<ExportCodec>("h264");
   const [preferHwEncode, setPreferHwEncode] = useState(true);
   const [showMore, setShowMore] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -371,8 +372,8 @@ export function ClipStudio() {
           {showMore ? "Hide options" : "More options"}
         </button>
 
-        {showMore && (
-          <div className="studio-opts-more">
+        <div className={showMore ? "studio-opts-more open" : "studio-opts-more"}>
+          <div className="studio-opts-more-inner">
             {captionsEnabled && (
               <>
                 <label className="opt-row">
@@ -455,7 +456,7 @@ export function ClipStudio() {
               </select>
             </label>
           </div>
-        )}
+        </div>
       </div>
 
       {error && <p className="form-error">{error}</p>}
@@ -534,26 +535,48 @@ export function ClipStudio() {
       {/* 2) Recent jobs */}
       {history.length > 0 && (
         <div className="history-block">
-          <p className="option-label">Recent jobs</p>
-          <ul className="job-history">
-            {history.slice(0, 6).map((h) => (
-              <li key={h.id}>
-                <button
-                  type="button"
-                  className={job?.id === h.id ? "history-item on" : "history-item"}
-                  onClick={() => openHistoryJob(h.id)}
-                >
-                  <span className="history-status">{h.status}</span>
-                  <span className="history-title">
-                    {h.title || h.url.replace(/^https?:\/\//, "").slice(0, 40)}
-                  </span>
-                  <span className="history-meta">
-                    {h.clipCount ? `${h.clipCount} clips` : `${h.progress}%`}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <button
+            type="button"
+            className={showHistory ? "history-toggle open" : "history-toggle"}
+            aria-expanded={showHistory}
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            <span>Recent jobs</span>
+            <span className="history-arrow" aria-hidden>
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                <path
+                  d="M3.5 6.25 8 10.75l4.5-4.5"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+          </button>
+          <div className={showHistory ? "history-panel open" : "history-panel"}>
+            <div className="history-panel-inner">
+              <ul className="job-history">
+                {history.slice(0, 6).map((h) => (
+                  <li key={h.id}>
+                    <button
+                      type="button"
+                      className={job?.id === h.id ? "history-item on" : "history-item"}
+                      onClick={() => openHistoryJob(h.id)}
+                    >
+                      <span className="history-status">{h.status}</span>
+                      <span className="history-title">
+                        {h.title || h.url.replace(/^https?:\/\//, "").slice(0, 40)}
+                      </span>
+                      <span className="history-meta">
+                        {h.clipCount ? `${h.clipCount} clips` : `${h.progress}%`}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 
@@ -562,8 +585,10 @@ export function ClipStudio() {
         <section className="clips" aria-live="polite">
           <h2>Ready to share</h2>
           <p className="clips-sub">
-            {activeAspect} ·{" "}
-            {activeCaptions ? "captions on" : "clean video (no captions)"}
+            Your best moments, cut and scored — pick one, download, or jump into
+            Studio to polish before you post.
+            {activeAspect ? ` · ${activeAspect}` : ""}
+            {activeCaptions ? " · captions burned in" : " · clean export"}
           </p>
 
           {(job.analyticsSummary || (job.chapters && job.chapters.length > 0)) && (

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { AiSuggestion, ViralScorecard } from "@/lib/growth-types";
 import { ViralScorecardView } from "@/components/editor/growth/ViralScorecard";
+import { CAPTION_SPEAKER_COLORS } from "@/lib/ai-edit-prompt";
 
 type Props = {
   projectId: string;
@@ -20,9 +21,22 @@ type Props = {
   onApplyMarkers: () => void;
   onHookFix: (id: string) => void;
   onOpenGrowthHub: () => void;
-  onOpenTranscript?: () => void;
   onReframe?: () => void;
   onSearchSeek?: (query: string, mode?: "keyword" | "semantic") => void;
+  /** Natural-language look / transform edit for the selected (or all) clips. */
+  onApplyEditPrompt?: (prompt: string, scope: "selected" | "all") => void;
+  /** Burn / rebuild captions from Whisper transcript. */
+  onAutoCaptions?: () => void;
+  /** Manual timed caption line. */
+  onAddManualCaption?: (opts: {
+    text: string;
+    start: number;
+    duration: number;
+    speaker?: number;
+    important?: boolean;
+  }) => void;
+  /** Captions / transcript section rendered below AI tools (same scroll). */
+  captionsSlot?: ReactNode;
 };
 
 export function AiAssistantPanel({
@@ -35,83 +49,205 @@ export function AiAssistantPanel({
   onApplyMarkers,
   onHookFix,
   onOpenGrowthHub,
-  onOpenTranscript,
   onReframe,
   onSearchSeek,
+  onApplyEditPrompt,
+  onAutoCaptions,
+  onAddManualCaption,
+  captionsSlot,
 }: Props) {
   const [filter, setFilter] = useState<string>("all");
   const [q, setQ] = useState("");
   const [searchMode, setSearchMode] = useState<"keyword" | "semantic">("semantic");
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editScope, setEditScope] = useState<"selected" | "all">("selected");
+  const [capText, setCapText] = useState("");
+  const [capStart, setCapStart] = useState(0);
+  const [capDur, setCapDur] = useState(2.5);
+  const [capSpeaker, setCapSpeaker] = useState(0);
+  const [capImportant, setCapImportant] = useState(false);
 
   const filtered =
-    filter === "all"
-      ? suggestions
-      : suggestions.filter((s) => s.kind === filter);
-
+    filter === "all" ? suggestions : suggestions.filter((s) => s.kind === filter);
   const kinds = Array.from(new Set(suggestions.map((s) => s.kind)));
 
   return (
-    <div className="sidebar-panel cc-ai-panel">
-      <h3 className="cc-lib-title">AI Assistant</h3>
+    <div className="sidebar-panel cc-ai-panel cc-ai-captions-scroll">
+      <h3 className="cc-lib-title">AI & captions</h3>
       <p className="cc-lib-hint">
-        Find hooks, silence, and viral moments on the timeline.
+        Describe the look you want, burn subtitles, or scroll down for the full transcript tools.
       </p>
 
-      {onSearchSeek && (
-        <div className="cc-search-row">
-          <input
-            className="cc-ai-filter"
-            placeholder='Find in transcript…'
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && q.trim()) onSearchSeek(q.trim(), searchMode);
-            }}
+      {onApplyEditPrompt && (
+        <div className="cc-ai-edit-box">
+          <textarea
+            className="cc-ai-edit-input"
+            rows={3}
+            placeholder='e.g. “make it warmer and brighter with a soft vignette”'
+            value={editPrompt}
+            onChange={(e) => setEditPrompt(e.target.value)}
           />
+          <div className="seg-row compact">
+            <button
+              type="button"
+              className={editScope === "selected" ? "seg-btn on" : "seg-btn"}
+              onClick={() => setEditScope("selected")}
+            >
+              Selected clip
+            </button>
+            <button
+              type="button"
+              className={editScope === "all" ? "seg-btn on" : "seg-btn"}
+              onClick={() => setEditScope("all")}
+            >
+              All clips
+            </button>
+          </div>
           <button
             type="button"
-            className="btn"
-            onClick={() => q.trim() && onSearchSeek(q.trim(), searchMode)}
+            className="btn wide primary"
+            disabled={!editPrompt.trim()}
+            onClick={() => {
+              onApplyEditPrompt(editPrompt.trim(), editScope);
+              setEditPrompt("");
+            }}
           >
-            Go
+            Apply edit
           </button>
         </div>
       )}
+
+      <div className="cc-ai-block">
+        <p className="tool-label">Subtitles</p>
+        <p className="cc-lib-hint">
+          Auto from speech, or type a line at a specific second. Speakers get different colors;
+          important lines highlight gold.
+        </p>
+        {onAutoCaptions && (
+          <button type="button" className="btn wide" onClick={onAutoCaptions}>
+            Auto captions from speech
+          </button>
+        )}
+        {onAddManualCaption && (
+          <div className="cc-manual-cap">
+            <input
+              className="cc-ai-filter"
+              placeholder="Subtitle text…"
+              value={capText}
+              onChange={(e) => setCapText(e.target.value)}
+            />
+            <div className="cc-manual-cap-row">
+              <label>
+                At (s)
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={capStart}
+                  onChange={(e) => setCapStart(Number(e.target.value))}
+                />
+              </label>
+              <label>
+                Length
+                <input
+                  type="number"
+                  min={0.4}
+                  step={0.1}
+                  value={capDur}
+                  onChange={(e) => setCapDur(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="seg-row compact wrap">
+              {CAPTION_SPEAKER_COLORS.map((c, i) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={capSpeaker === i ? "cap-swatch on" : "cap-swatch"}
+                  style={{ background: c }}
+                  title={`Speaker ${i + 1}`}
+                  onClick={() => setCapSpeaker(i)}
+                />
+              ))}
+              <button
+                type="button"
+                className={capImportant ? "seg-btn on" : "seg-btn"}
+                onClick={() => setCapImportant((v) => !v)}
+              >
+                Important
+              </button>
+            </div>
+            <button
+              type="button"
+              className="btn tiny wide"
+              disabled={!capText.trim()}
+              onClick={() => {
+                onAddManualCaption({
+                  text: capText.trim(),
+                  start: Math.max(0, capStart),
+                  duration: Math.max(0.4, capDur),
+                  speaker: capSpeaker,
+                  important: capImportant,
+                });
+                setCapText("");
+              }}
+            >
+              Add subtitle at {capStart.toFixed(1)}s
+            </button>
+          </div>
+        )}
+      </div>
+
       {onSearchSeek && (
-        <div className="cc-platform-row" style={{ marginBottom: "0.5rem" }}>
-          <button
-            type="button"
-            className={searchMode === "semantic" ? "cc-hook-chip on" : "cc-hook-chip"}
-            onClick={() => setSearchMode("semantic")}
-          >
-            Meaning
-          </button>
-          <button
-            type="button"
-            className={searchMode === "keyword" ? "cc-hook-chip on" : "cc-hook-chip"}
-            onClick={() => setSearchMode("keyword")}
-          >
-            Keyword
-          </button>
-        </div>
+        <>
+          <p className="tool-label">Find in speech</p>
+          <div className="cc-search-row">
+            <input
+              className="cc-ai-filter"
+              placeholder="Find in transcript…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && q.trim()) onSearchSeek(q.trim(), searchMode);
+              }}
+            />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => q.trim() && onSearchSeek(q.trim(), searchMode)}
+            >
+              Go
+            </button>
+          </div>
+          <div className="seg-row compact" style={{ marginBottom: "0.5rem" }}>
+            <button
+              type="button"
+              className={searchMode === "semantic" ? "seg-btn on" : "seg-btn"}
+              onClick={() => setSearchMode("semantic")}
+            >
+              Meaning
+            </button>
+            <button
+              type="button"
+              className={searchMode === "keyword" ? "seg-btn on" : "seg-btn"}
+              onClick={() => setSearchMode("keyword")}
+            >
+              Keyword
+            </button>
+          </div>
+        </>
       )}
 
       <button
         type="button"
-        className="btn wide primary cc-import"
+        className="btn wide"
         disabled={analyzing || duration < 0.5}
         onClick={onAnalyze}
-        aria-label="Analyze timeline for viral moments"
       >
-        {analyzing ? "Analyzing…" : "Analyze timeline"}
+        {analyzing ? "Analyzing…" : "Find viral moments"}
       </button>
 
       <div className="cc-ai-actions">
-        {onOpenTranscript && (
-          <button type="button" className="btn" onClick={onOpenTranscript}>
-            Transcript
-          </button>
-        )}
         {onReframe && (
           <button type="button" className="btn" onClick={onReframe}>
             AI Reframe
@@ -172,20 +308,10 @@ export function AiAssistantPanel({
         </>
       )}
 
-      {!analyzing && suggestions.length === 0 && !score && (
-        <div className="cc-growth-empty">
-          <p className="cc-growth-empty-title">No AI insights yet</p>
-          <p className="cc-lib-hint cc-ai-empty">
-            Run analyze to place emoji markers and get a viral score.
-          </p>
-        </div>
-      )}
-
-      {analyzing && (
-        <div className="cc-growth-skeleton" aria-busy="true" aria-label="Analyzing timeline">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="cc-skeleton-line" style={{ width: `${65 + (i % 3) * 10}%` }} />
-          ))}
+      {captionsSlot && (
+        <div className="cc-ai-captions-embed">
+          <div className="cc-ai-captions-divider" aria-hidden />
+          {captionsSlot}
         </div>
       )}
     </div>

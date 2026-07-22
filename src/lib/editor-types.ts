@@ -272,17 +272,27 @@ export type TextRun = {
   color?: string;
 };
 
-/** Fonts available in the text editor (present on typical systems). */
+/**
+ * Curated fonts for titles, captions, and lower-thirds.
+ * Prefer faces that are common on Windows / Mac for reliable preview + export.
+ */
 export const TEXT_FONTS: string[] = [
-  "Arial Black",
+  "Inter",
   "Arial",
+  "Helvetica",
+  "Arial Black",
   "Impact",
+  "Montserrat",
+  "Poppins",
+  "Roboto",
+  "Open Sans",
+  "Lato",
   "Georgia",
   "Times New Roman",
+  "Palatino Linotype",
+  "Courier New",
   "Verdana",
   "Trebuchet MS",
-  "Courier New",
-  "Comic Sans MS",
 ];
 
 /** Quick stickers / emoji / shapes dropped onto the text lane. */
@@ -496,6 +506,16 @@ export const DEFAULT_TRANSFORM: ClipTransform = {
   opacity: 1,
 };
 
+/** Named overlay layer stacked on a clip (preview + inspector). */
+export type ClipLayer = {
+  id: string;
+  name: string;
+  /** Optional media; empty layers show a numbered placeholder until assigned. */
+  assetId?: string;
+  enabled?: boolean;
+  opacity?: number;
+};
+
 export type TimelineClip = {
   id: string;
   assetId: string;
@@ -524,6 +544,11 @@ export type TimelineClip = {
    * Ignored for the main sequential track.
    */
   tlStart?: number;
+  /**
+   * Named visual layers stacked on top of this clip (CapCut-style).
+   * Optional for back-compat; base media is always the clip itself.
+   */
+  layers?: ClipLayer[];
   /** When false, clip audio is treated as unlinked from video (UI hint). */
   linkedAudio?: boolean;
   volume: number; // 0..2
@@ -589,11 +614,11 @@ export type TrackChrome = {
 };
 
 export const DEFAULT_TRACKS: Record<TrackId, TrackChrome> = {
-  video: { name: "V1 Main", locked: false, muted: false, solo: false, hidden: false, height: 58, color: "#1f9d7a" },
-  overlay: { name: "V2 Overlay", locked: false, muted: false, solo: false, hidden: false, height: 44, color: "#3a9bb5" },
-  overlay2: { name: "V3 Overlay", locked: false, muted: false, solo: false, hidden: false, height: 44, color: "#6b8f71" },
-  music: { name: "Music", locked: false, muted: false, solo: false, hidden: false, height: 34, color: "#147a5e" },
-  text: { name: "Text", locked: false, muted: false, solo: false, hidden: false, height: 34, color: "#5b8a72" },
+  video: { name: "Video", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#6b7280" },
+  overlay: { name: "V2 Overlay", locked: false, muted: false, solo: false, hidden: false, height: 44, color: "#52525b" },
+  overlay2: { name: "V3 Overlay", locked: false, muted: false, solo: false, hidden: false, height: 44, color: "#3f3f46" },
+  music: { name: "Audio", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#71717a" },
+  text: { name: "Text", locked: false, muted: false, solo: false, hidden: false, height: 56, color: "#a1a1aa" },
 };
 
 export type ProjectSpec = {

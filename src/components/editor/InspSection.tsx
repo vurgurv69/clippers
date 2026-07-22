@@ -1,46 +1,46 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
-const OPEN_KEY = "clippers.insp.sections";
-
-function loadOpen(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem(OPEN_KEY) || "{}");
-  } catch {
-    return {};
-  }
+/** Always-visible inspector block (no collapse — content stays on screen). */
+export function PanelBlock({
+  title,
+  hint,
+  children,
+  filterMatch = true,
+}: {
+  title: string;
+  hint?: string;
+  children: ReactNode;
+  filterMatch?: boolean;
+}) {
+  if (!filterMatch) return null;
+  return (
+    <div className="insp-block">
+      <h4 className="insp-block-title">{title}</h4>
+      {hint ? <p className="insp-section-hint">{hint}</p> : null}
+      <div className="insp-block-body">{children}</div>
+    </div>
+  );
 }
 
-/** Collapsible inspector section — remembers open state per id. */
+/** Optional collapsible section for advanced/extra groups. */
 export function InspSection({
   id,
   title,
+  hint,
   defaultOpen = true,
   children,
   filterMatch = true,
 }: {
   id: string;
   title: string;
+  hint?: string;
   defaultOpen?: boolean;
   children: ReactNode;
-  /** When false, hide entire section (inspector search). */
   filterMatch?: boolean;
 }) {
-  const [open, setOpen] = useState(() => {
-    const saved = loadOpen();
-    return typeof saved[id] === "boolean" ? saved[id] : defaultOpen;
-  });
-
-  useEffect(() => {
-    const all = loadOpen();
-    all[id] = open;
-    try {
-      localStorage.setItem(OPEN_KEY, JSON.stringify(all));
-    } catch {
-      // ignore
-    }
-  }, [id, open]);
+  const [open, setOpen] = useState(defaultOpen);
 
   if (!filterMatch) return null;
 
@@ -52,10 +52,15 @@ export function InspSection({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span>{title}</span>
+        <span className="insp-section-title">{title}</span>
         <span aria-hidden>{open ? "▾" : "▸"}</span>
       </button>
-      {open && <div className="insp-section-body">{children}</div>}
+      {open && (
+        <div className="insp-section-body">
+          {hint ? <p className="insp-section-hint">{hint}</p> : null}
+          {children}
+        </div>
+      )}
     </div>
   );
 }

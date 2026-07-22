@@ -22,6 +22,7 @@ import {
   type BezierHandles,
   type ClipEffect,
   type ClipKeyframe,
+  type ClipLayer,
   type ClipTransform,
   type EffectKind,
   type KeyframeEase,
@@ -72,18 +73,22 @@ import {
   AnimationLibrary,
   EffectLibrary,
   FilterLibrary,
-  StickerLibrary,
-  TemplateLibrary,
-  TextLibrary,
   TransitionLibrary,
 } from "@/components/editor/library/CapCutLibraries";
+import { TemplateLibrary } from "@/components/editor/library/TemplateLibrary";
 import { CommandPalette, type CommandItem } from "@/components/editor/CommandPalette";
 import { UndoHistoryPanel } from "@/components/editor/UndoHistoryPanel";
 import { StudioStatusBar } from "@/components/editor/StudioStatusBar";
 import { ClipContextMenu } from "@/components/editor/ClipContextMenu";
 import { KeymapDialog } from "@/components/editor/KeymapDialog";
+import { StudioManual } from "@/components/editor/StudioManual";
 import { AiAssistantPanel } from "@/components/editor/ai/AiAssistantPanel";
 import { TranscriptPanel } from "@/components/editor/ai/TranscriptPanel";
+import {
+  applyEditResultToClip,
+  captionColorForSpeaker,
+  parseEditPrompt,
+} from "@/lib/ai-edit-prompt";
 import { GrowthHub } from "@/components/editor/growth/GrowthHub";
 import { GrowthShellPanel } from "@/components/editor/growth/GrowthShellPanel";
 import { AI_MARKER_META, type AiSuggestion, type BrandKit, type CalendarEvent, type GrowthPack, type HookFixId, type ViralScorecard } from "@/lib/growth-types";
@@ -416,7 +421,7 @@ export function StudioEditor({
       setBinW(200);
       setInspectorW(340);
       setExpanded(true);
-      setSidebarTab("audio");
+      setSidebarTab("media");
       setTab("audio");
       setInspectorCollapsed(false);
     } else if (w === "deliver") {
@@ -462,6 +467,7 @@ export function StudioEditor({
   );
   const [uploadingMusic, setUploadingMusic] = useState(false);
   const [showKeymap, setShowKeymap] = useState(false);
+  const [showManual, setShowManual] = useState(false);
   const [keymap, setKeymap] = useState<Record<string, ShortcutAction>>(() => loadKeymap());
   const kfClipboardRef = useRef<ClipKeyframe[] | null>(null);
   const [texts, setTexts] = useState<TextOverlay[]>(() => project.spec?.texts ?? []);
@@ -882,6 +888,9 @@ export function StudioEditor({
     () => computeTimeline(viewClips, { freeMain: freeV1 || magDragActive }),
     [viewClips, freeV1, magDragActive],
   );
+
+  /** Empty (or short) projects still get a scrubbable canvas so the playhead can be parked for inserts. */
+  const scrubTotal = Math.max(total + 8, 60);
 
   const activeIndex = useMemo(
     () => activeMainIndex(viewClips, starts, current),
@@ -1583,7 +1592,7 @@ export function StudioEditor({
   }
 
   function seek(t: number) {
-    const clamped = clamp(t, 0, total);
+    const clamped = clamp(t, 0, scrubTotal);
     curRef.current = clamped;
     setCurrent(clamped);
     const v = videoRef.current;
@@ -2070,7 +2079,7 @@ export function StudioEditor({
     if (!el) return 0;
     const rect = el.getBoundingClientRect();
     const x = clientX - rect.left + el.scrollLeft;
-    return clamp(x / pxPerSec, 0, total || 0);
+    return clamp(x / pxPerSec, 0, scrubTotal);
   }
 
   // ---------- uploads ----------
@@ -2113,7 +2122,7 @@ export function StudioEditor({
                 ...prev,
                 {
                   assetId: asset.id,
-                  start: 0,
+                  start: current,
                   inPoint: 0,
                   outPoint: asset.duration || 30,
                   volume: 0.8,
@@ -2124,7 +2133,7 @@ export function StudioEditor({
             } else {
               setMusic({
                 assetId: asset.id,
-                start: 0,
+                start: current,
                 inPoint: 0,
                 outPoint: asset.duration || 30,
                 volume: 0.8,
@@ -2133,16 +2142,17 @@ export function StudioEditor({
               });
             }
           } else {
+            setFreeV1(true);
             setViewClips((prev) => {
               const clip = defaultClip(asset, uid("clip"));
-              if (freeV1) clip.tlStart = current;
+              clip.tlStart = current;
               setSelectedId(clip.id);
               setSelectedIds([clip.id]);
               setSidebarTab("media");
               setTab("clip");
               return [...prev, clip];
             });
-            pushToast("Clip added to timeline — press Play", "success");
+            pushToast(`Clip added at ${fmt(current)}`, "success");
           }
         }
       } catch (err) {
@@ -2151,13 +2161,13 @@ export function StudioEditor({
         setUploading(false);
       }
     },
-    [project.id],
+    [project.id, current, music, fmt],
   );
 
   function addAssetToTimeline(asset: ProjectAsset, opts?: { lane?: number }) {
     if (asset.kind === "font") {
       pushToast("Select a text block, then choose this font", "info");
-      setSidebarTab("text");
+      setSidebarTab("ai");
       setTab("clip");
       return;
     }
@@ -2178,7 +2188,7 @@ export function StudioEditor({
           ...prev,
           {
             assetId: asset.id,
-            start: 0,
+            start: current,
             inPoint: 0,
             outPoint: asset.duration || 30,
             volume: 0.8,
@@ -2189,7 +2199,7 @@ export function StudioEditor({
       } else {
         setMusic({
           assetId: asset.id,
-          start: 0,
+          start: current,
           inPoint: 0,
           outPoint: asset.duration || 30,
           volume: 0.8,
@@ -2197,17 +2207,18 @@ export function StudioEditor({
           fadeOut: 1,
         });
       }
-      setSidebarTab("audio");
+      setSidebarTab("media");
       setTab("audio");
       return;
     }
     const clip = defaultClip(asset, uid("clip"));
     const lane = opts?.lane;
+    setFreeV1(true);
     if (typeof lane === "number" && lane > 0) {
       clip.lane = lane;
       clip.tlStart = current;
       if (asset.kind === "image") clip.outPoint = Math.min(clip.outPoint, 3);
-    } else if (freeV1) {
+    } else {
       clip.tlStart = current;
     }
     setViewClips((prev) => [...prev, clip]);
@@ -2215,6 +2226,7 @@ export function StudioEditor({
     setSelectedIds([clip.id]);
     if (lane === 1) pushToast("Added to V2 Overlay", "success");
     else if (lane === 2) pushToast("Added to V3 Overlay", "success");
+    else pushToast(`Added at ${fmt(current)}`, "success");
   }
 
   function addAssetAsOverlay(asset: ProjectAsset) {
@@ -2365,7 +2377,7 @@ export function StudioEditor({
         ),
       );
     }
-    setSidebarTab("audio");
+    setSidebarTab("media");
     setTab("audio");
     pushToast(`Dub: ${lanes.length} clips on music lane`, "success");
   }
@@ -2383,18 +2395,68 @@ export function StudioEditor({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload failed");
       const asset = data.asset as ProjectAsset;
-      setAssets((prev) => [...prev, asset]);
-      setMusic({
-        assetId: asset.id,
-        start: 0,
-        inPoint: 0,
-        outPoint: asset.duration || 30,
-        volume: 0.8,
-        fadeIn: 0.5,
-        fadeOut: 1,
-      });
+      await applyImportedAudio(asset);
+      pushToast("Audio added", "success");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Music upload failed");
+    } finally {
+      setUploadingMusic(false);
+    }
+  }
+
+  async function applyImportedAudio(asset: ProjectAsset) {
+    setAssets((prev) => (prev.some((a) => a.id === asset.id) ? prev : [...prev, asset]));
+    const track: MusicTrack = {
+      assetId: asset.id,
+      start: 0,
+      inPoint: 0,
+      outPoint: asset.duration || 30,
+      volume: 0.8,
+      fadeIn: 0.5,
+      fadeOut: 1,
+    };
+    if (!music) setMusic(track);
+    else setMusicTracks((prev) => [...prev, track]);
+    setTab("audio");
+    setSidebarTab("media");
+  }
+
+  async function onExtractAudioFromVideo(file: File) {
+    setUploadingMusic(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/editor/project/${project.id}/audio-import`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Extract failed");
+      await applyImportedAudio(data.asset as ProjectAsset);
+      pushToast("Audio extracted from video", "success");
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Extract failed", "error");
+    } finally {
+      setUploadingMusic(false);
+    }
+  }
+
+  async function onImportYoutubeAudio(url: string) {
+    setUploadingMusic(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/editor/project/${project.id}/audio-import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ youtubeUrl: url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "YouTube import failed");
+      await applyImportedAudio(data.asset as ProjectAsset);
+      pushToast("YouTube audio added", "success");
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "YouTube import failed", "error");
     } finally {
       setUploadingMusic(false);
     }
@@ -2660,7 +2722,7 @@ export function StudioEditor({
         assets.find((a) => a.kind === "audio" && a.tags?.includes("music-bed")) ||
         assets.find((a) => a.kind === "audio");
       if (!bed) {
-        setSidebarTab("audio");
+        setSidebarTab("media");
         pushToast("Import a music bed to lift the opening", "info");
         return;
       }
@@ -2679,7 +2741,7 @@ export function StudioEditor({
       } else {
         setMusic(track);
       }
-      setSidebarTab("audio");
+      setSidebarTab("media");
       setTab("audio");
       pushToast(`Music bed + duck on “${bed.name.slice(0, 24)}”`, "success");
       return;
@@ -2935,7 +2997,7 @@ export function StudioEditor({
       const hit = data.hits?.[0] as { start: number; text: string } | undefined;
       if (!hit) {
         pushToast(data.message || "No matches — transcribe first", "info");
-        setSidebarTab("transcript");
+        setSidebarTab("ai");
         return;
       }
       seek(hit.start);
@@ -3135,7 +3197,7 @@ export function StudioEditor({
     ];
     if (!lanes.length) {
       pushToast("Add a music bed first", "info");
-      setSidebarTab("audio");
+      setSidebarTab("media");
       return;
     }
     if (music) {
@@ -3148,7 +3210,12 @@ export function StudioEditor({
   }
 
   function burnTranscriptCaptions(
-    segments: { start: number; end: number; text: string }[],
+    segments: {
+      start: number;
+      end: number;
+      text: string;
+      words?: { speakerId?: number }[];
+    }[],
   ) {
     const captionTpl =
       TEXT_TEMPLATES.find((t) => t.id === "caption")?.apply || {
@@ -3162,19 +3229,35 @@ export function StudioEditor({
         anim: "none" as const,
       };
 
-    // Merge tiny gaps, cap overlays so the timeline stays usable
-    const merged: { start: number; end: number; text: string }[] = [];
-    for (const s of segments) {
+    type CapLine = {
+      start: number;
+      end: number;
+      text: string;
+      speaker: number;
+      important: boolean;
+    };
+    const merged: CapLine[] = [];
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
       const text = (s.text || "").trim();
       if (!text) continue;
       const start = Math.max(0, s.start);
       const end = Math.max(start + 0.4, s.end);
+      const speakerWord = s.words?.find((w) => typeof w.speakerId === "number");
+      const speaker = speakerWord?.speakerId ?? i % 4;
+      const important = /[!?]|(^|\s)(wait|listen|important|never|always)\b/i.test(text);
       const last = merged[merged.length - 1];
-      if (last && start - last.end < 0.15 && last.text.length + text.length < 72) {
+      if (
+        last &&
+        last.speaker === speaker &&
+        start - last.end < 0.15 &&
+        last.text.length + text.length < 72
+      ) {
         last.end = end;
         last.text = `${last.text} ${text}`.trim();
+        last.important = last.important || important;
       } else {
-        merged.push({ start, end, text });
+        merged.push({ start, end, text, speaker, important });
       }
     }
     const use = merged.slice(0, 48);
@@ -3189,17 +3272,89 @@ export function StudioEditor({
       start: s.start,
       duration: Math.min(6, Math.max(0.6, s.end - s.start)),
       y: 0.82,
-      size: 0.055,
+      size: s.important ? 0.065 : 0.055,
       bold: true,
       stroke: 3,
       strokeColor: "#000000",
-      color: "#ffffff",
+      color: captionColorForSpeaker(s.speaker, s.important),
       anim: "none" as const,
       transform: "none" as const,
     }));
     setTexts((prev) => [...prev, ...added]);
-    setSidebarTab("text");
+    setSidebarTab("ai");
+    setTab("text");
     pushToast(`Burned ${added.length} caption${added.length > 1 ? "s" : ""}`, "success");
+  }
+
+  function applyAiEditPrompt(prompt: string, scope: "selected" | "all") {
+    const result = parseEditPrompt(prompt);
+    const unclear = result.summary[0]?.startsWith("No clear");
+    if (unclear && !result.color && !result.transform && result.speed == null) {
+      pushToast(result.summary[0], "info");
+      return;
+    }
+    if (scope === "selected") {
+      if (!selectedClip) {
+        pushToast("Select a clip first", "info");
+        return;
+      }
+      setViewClips((prev) =>
+        prev.map((c) => (c.id === selectedClip.id ? applyEditResultToClip(c, result) : c)),
+      );
+    } else {
+      setViewClips((prev) => prev.map((c) => applyEditResultToClip(c, result)));
+    }
+    pushToast(result.summary.join(" · "), "success");
+  }
+
+  function addManualCaption(opts: {
+    text: string;
+    start: number;
+    duration: number;
+    speaker?: number;
+    important?: boolean;
+  }) {
+    const t = {
+      ...defaultText(uid("cap"), opts.start),
+      text: opts.text,
+      start: Math.max(0, opts.start),
+      duration: Math.max(0.4, opts.duration),
+      y: 0.82,
+      size: opts.important ? 0.065 : 0.055,
+      bold: true,
+      stroke: 3,
+      strokeColor: "#000000",
+      color: captionColorForSpeaker(opts.speaker ?? 0, opts.important),
+      anim: "none" as const,
+      transform: "none" as const,
+    };
+    setTexts((prev) => [...prev, t]);
+    setSelectedTextId(t.id);
+    setTab("text");
+    pushToast(`Subtitle at ${opts.start.toFixed(1)}s`, "success");
+  }
+
+  async function autoCaptionsFromSpeech() {
+    const assetId =
+      selectedClip?.assetId || assets.find((a) => a.kind === "video")?.id || null;
+    if (!assetId) {
+      pushToast("Import a video first", "info");
+      return;
+    }
+    pushToast("Transcribing for captions…", "info");
+    try {
+      const res = await fetch("/api/ai/transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id, assetId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Transcribe failed");
+      burnTranscriptCaptions(data.segments || []);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Caption failed", "error");
+      setSidebarTab("ai");
+    }
   }
 
   function applyStabilizeToMainClips(level: number, opts?: { silent?: boolean }) {
@@ -3247,6 +3402,69 @@ export function StudioEditor({
     setTab("color");
     setSidebarTab("effects");
     pushToast("Adjustment layer on V2 — grade applies over clips below", "success");
+  }
+
+  function addClipLayer(clipId: string, assetId: string, name?: string) {
+    const clip = viewClips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const asset = assetById.get(assetId);
+    if (!asset || (asset.kind !== "video" && asset.kind !== "image")) {
+      pushToast("Pick a video or photo for the layer", "info");
+      return;
+    }
+    const n = (clip.layers?.length || 0) + 1;
+    const layer: ClipLayer = {
+      id: uid("lyr"),
+      name: (name || "").trim() || `Layer #${n}`,
+      assetId,
+      enabled: true,
+      opacity: 1,
+    };
+    patchClip(clipId, { layers: [...(clip.layers || []), layer] });
+    pushToast(`Added ${layer.name}`, "success");
+    return layer.id;
+  }
+
+  async function uploadClipLayerFile(clipId: string, file: File, name?: string) {
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/editor/project/${project.id}/asset`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      const asset = data.asset as ProjectAsset;
+      setAssets((prev) => [...prev, asset]);
+      return addClipLayer(clipId, asset.id, name);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Layer upload failed", "error");
+      return undefined;
+    }
+  }
+
+  function renameClipLayer(clipId: string, layerId: string, name: string) {
+    const clip = viewClips.find((c) => c.id === clipId);
+    if (!clip?.layers) return;
+    const next = name.trim() || "Layer";
+    patchClip(clipId, {
+      layers: clip.layers.map((l) => (l.id === layerId ? { ...l, name: next } : l)),
+    });
+  }
+
+  function removeClipLayer(clipId: string, layerId: string) {
+    const clip = viewClips.find((c) => c.id === clipId);
+    if (!clip?.layers) return;
+    patchClip(clipId, { layers: clip.layers.filter((l) => l.id !== layerId) });
+  }
+
+  function patchClipLayer(clipId: string, layerId: string, patch: Partial<ClipLayer>) {
+    const clip = viewClips.find((c) => c.id === clipId);
+    if (!clip?.layers) return;
+    patchClip(clipId, {
+      layers: clip.layers.map((l) => (l.id === layerId ? { ...l, ...patch } : l)),
+    });
   }
 
   function enterCompound(id: string) {
@@ -3508,7 +3726,7 @@ export function StudioEditor({
     const t = defaultText(uid("txt"), current);
     setTexts((prev) => [...prev, t]);
     setSelectedTextId(t.id);
-    setSidebarTab("text");
+    setSidebarTab("ai");
     setTab("text");
   }
 
@@ -3517,7 +3735,7 @@ export function StudioEditor({
     if (!style.text) t.text = label;
     setTexts((prev) => [...prev, t]);
     setSelectedTextId(t.id);
-    setSidebarTab("text");
+    setSidebarTab("ai");
     setTab("text");
     pushToast(`${label} added`, "success");
   }
@@ -3563,7 +3781,7 @@ export function StudioEditor({
       setMusic(lane);
     }
     patchClip(clip.id, { volume: 0, linkedAudio: false });
-    setSidebarTab("audio");
+    setSidebarTab("media");
       setTab("audio");
     pushToast("Audio linked on music lane — follows this clip", "success");
   }
@@ -3591,7 +3809,7 @@ export function StudioEditor({
     t.font = "Segoe UI Emoji";
     setTexts((prev) => [...prev, t]);
     setSelectedTextId(t.id);
-    setSidebarTab("text");
+    setSidebarTab("ai");
       setTab("clip");
     pushToast("Sticker added", "success");
   }
@@ -3610,7 +3828,7 @@ export function StudioEditor({
       t.stickerLottie = true;
       setTexts((prev) => [...prev, t]);
       setSelectedTextId(t.id);
-      setSidebarTab("text");
+      setSidebarTab("ai");
       setTab("clip");
       pushToast(`${label} Lottie sticker added`, "success");
       return;
@@ -3908,7 +4126,7 @@ export function StudioEditor({
         id: "ai-search",
         label: "AI: Search transcript",
         hint: "AI",
-        run: () => setSidebarTab("transcript"),
+        run: () => setSidebarTab("ai"),
       },
       {
         id: "ai-reframe",
@@ -3997,17 +4215,17 @@ export function StudioEditor({
   const ticks = useMemo(() => {
     const step = pxPerSec < 40 ? 5 : pxPerSec < 90 ? 2 : 1;
     const out: number[] = [];
-    for (let t = 0; t <= total + 0.01; t += step) out.push(t);
+    for (let t = 0; t <= scrubTotal + 0.01; t += step) out.push(t);
     return out;
-  }, [total, pxPerSec]);
+  }, [scrubTotal, pxPerSec]);
 
   // Minor tick marks between labels (1s, or 0.5s when zoomed in)
   const minorTicks = useMemo(() => {
     const step = pxPerSec > 140 ? 0.5 : 1;
     const out: number[] = [];
-    for (let t = 0; t <= total + 0.01; t += step) out.push(Math.round(t * 100) / 100);
+    for (let t = 0; t <= scrubTotal + 0.01; t += step) out.push(Math.round(t * 100) / 100);
     return out;
-  }, [total, pxPerSec]);
+  }, [scrubTotal, pxPerSec]);
 
   // Magnetic snap targets: all clip edges + timeline start + playhead + markers + SFX
   const snapPoints = useMemo(
@@ -4123,7 +4341,7 @@ export function StudioEditor({
     }
   }
 
-  const timelineWidth = Math.max(320, total * pxPerSec);
+  const timelineWidth = Math.max(320, scrubTotal * pxPerSec);
 
   // Keep virtualization viewport in sync on resize
   useEffect(() => {
@@ -4222,6 +4440,8 @@ export function StudioEditor({
     detachClipAudio,
     relinkClipAudio,
     onMusicFile,
+    onExtractAudioFromVideo,
+    onImportYoutubeAudio,
     addText,
     addSticker,
     addPackSticker,
@@ -4239,10 +4459,48 @@ export function StudioEditor({
     patchMarker,
     removeMarker,
     addAdjustmentLayer,
+    addClipLayer,
+    uploadClipLayerFile,
+    renameClipLayer,
+    removeClipLayer,
+    patchClipLayer,
+    thumbUrl,
+    assetUrl,
     setMulticamActive,
     cutMulticamAtPlayhead,
     syncMulticamGroup,
     clips: viewClips,
+    useProxy,
+    onToggleProxy: () => setUseProxy((v) => !v),
+    snapEnabled,
+    setSnapEnabled,
+    magnetic,
+    setMagnetic,
+    rippleEnabled,
+    setRippleEnabled,
+    freeV1,
+    onToggleFreeV1: () => {
+      setFreeV1((on) => {
+        const next = !on;
+        if (next) {
+          setViewClips((prev) => {
+            const { starts: packed } = computeTimeline(prev, { freeMain: false });
+            return prev.map((c, i) =>
+              clipLane(c) === 0 ? { ...c, tlStart: packed[i] ?? 0 } : c,
+            );
+          });
+          pushToast("V1 free-place on — drag clips freely", "info");
+        } else {
+          setViewClips((prev) =>
+            prev.map((c) =>
+              clipLane(c) === 0 ? { ...c, tlStart: undefined } : c,
+            ),
+          );
+          pushToast("V1 packed gapless", "info");
+        }
+        return next;
+      });
+    },
   };
 
 
@@ -4268,6 +4526,7 @@ export function StudioEditor({
           onExport={() => setShowExport(true)}
           canExport={clips.length > 0}
           onOpenKeymap={() => setShowKeymap(true)}
+          onOpenManual={() => setShowManual(true)}
           floatBin={floatBin}
           floatInspector={floatInspector}
           onToggleFloatBin={() => setFloatBin((v) => !v)}
@@ -4289,13 +4548,7 @@ export function StudioEditor({
           tool={editTool}
           onSetTool={setEditTool}
           selectedId={selectedId}
-          selectedTextId={selectedTextId}
-          onSplit={splitAtPlayhead}
           onDuplicate={() => selectedId && duplicateClip(selectedId)}
-          onDelete={() => {
-            if (selectedTextId) deleteText(selectedTextId);
-            else if (selectedId) deleteClip(selectedId);
-          }}
         />
 
         <div
@@ -4336,77 +4589,6 @@ export function StudioEditor({
                 onGenerateProxiesBatch={generateProxiesBatch}
                 onDelete={deleteMediaAsset}
               />
-            )}
-            {sidebarTab === "audio" && (
-              <div className="sidebar-panel cc-audio-panel">
-                <h3 className="cc-lib-title">Audio</h3>
-                <label className="btn wide primary cc-import">
-                  {uploadingMusic ? "Uploading…" : "Import music"}
-                  <input
-                    type="file"
-                    accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg"
-                    hidden
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) onMusicFile(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-                <h4 className="cc-lib-sub">Library beds</h4>
-                <p className="cc-lib-hint">Local generated pads (no CDN). Click to add + duck.</p>
-                <div className="cc-shell-grid">
-                  {(
-                    [
-                      ["bed-soft", "Soft pad"],
-                      ["bed-pulse", "Pulse"],
-                      ["bed-warm", "Warm drone"],
-                      ["bed-tech", "Tech tick"],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className="cc-shell-card"
-                      disabled={uploadingMusic}
-                      onClick={() => void generateLibraryAudio(id, "music")}
-                    >
-                      <span>♪</span>
-                      <strong>{label}</strong>
-                      <em>Music bed</em>
-                    </button>
-                  ))}
-                </div>
-                <h4 className="cc-lib-sub">SFX</h4>
-                <div className="cc-shell-grid">
-                  {(
-                    [
-                      ["sfx-whoosh", "Whoosh"],
-                      ["sfx-hit", "Hit"],
-                      ["sfx-pop", "Pop"],
-                      ["sfx-riser", "Riser"],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      className="cc-shell-card"
-                      disabled={uploadingMusic}
-                      onClick={() => void generateLibraryAudio(id, "sfx")}
-                    >
-                      <span>◈</span>
-                      <strong>{label}</strong>
-                      <em>SFX</em>
-                    </button>
-                  ))}
-                </div>
-                <p className="cc-lib-hint">Beds & SFX. Fine-tune mix in Inspector → Audio.</p>
-                <InspectorTabPanels ctx={{ ...panelCtx, tab: "audio" }} />
-              </div>
-            )}
-            {sidebarTab === "text" && <TextLibrary onInsert={insertTextStyle} />}
-            {sidebarTab === "stickers" && (
-              <StickerLibrary onGlyph={addSticker} onPack={addPackSticker} />
             )}
             {sidebarTab === "effects" && (
               <EffectLibrary
@@ -4502,26 +4684,30 @@ export function StudioEditor({
                 onApplyMarkers={applyAiMarkers}
                 onHookFix={applyHookFix}
                 onOpenGrowthHub={() => setShowGrowthHub(true)}
-                onOpenTranscript={() => setSidebarTab("transcript")}
                 onReframe={() => void runAiReframe()}
                 onSearchSeek={(q, mode) => void runAiSearch(q, mode ?? "semantic")}
-              />
-            )}
-            {sidebarTab === "transcript" && (
-              <TranscriptPanel
-                projectId={project.id}
-                assetId={
-                  selectedClip?.assetId ||
-                  assets.find((a) => a.kind === "video")?.id ||
-                  null
+                onApplyEditPrompt={applyAiEditPrompt}
+                onAutoCaptions={() => void autoCaptionsFromSpeech()}
+                onAddManualCaption={addManualCaption}
+                captionsSlot={
+                  <TranscriptPanel
+                    embedded
+                    projectId={project.id}
+                    assetId={
+                      selectedClip?.assetId ||
+                      assets.find((a) => a.kind === "video")?.id ||
+                      null
+                    }
+                    current={current}
+                    onSeek={seek}
+                    onRippleTrim={rippleTrimRange}
+                    onReframe={() => void runAiReframe()}
+                    onExportThumb={(h) => void exportThumbnail(h)}
+                    onShare={() => void createShareLink()}
+                    onBurnCaptions={burnTranscriptCaptions}
+                    onAddManualCaption={addManualCaption}
+                  />
                 }
-                current={current}
-                onSeek={seek}
-                onRippleTrim={rippleTrimRange}
-                onReframe={() => void runAiReframe()}
-                onExportThumb={(h) => void exportThumbnail(h)}
-                onShare={() => void createShareLink()}
-                onBurnCaptions={burnTranscriptCaptions}
               />
             )}
             {sidebarTab === "broll" && (
@@ -4609,6 +4795,7 @@ export function StudioEditor({
             previewTransform={previewTransform}
             previewOpacity={previewOpacity}
             assetUrl={assetUrl}
+            assetById={assetById}
             overlayHidden={false}
             overlayMuted={false}
             visibleOverlays={visibleOverlays}
@@ -4688,6 +4875,7 @@ export function StudioEditor({
             expanded,
             setExpanded,
             total,
+            scrubTotal,
             current,
             fmt,
             snapEnabled,
@@ -4749,8 +4937,7 @@ export function StudioEditor({
             setSelectedTextId,
             setTab: (t) => {
               if (t === "text") {
-                setSidebarTab("text");
-                setTab("clip");
+                setTab("text");
                 return;
               }
               if (t === "transitions") {
@@ -4768,7 +4955,6 @@ export function StudioEditor({
                 return;
               }
               if (t === "audio") {
-                setSidebarTab("audio");
                 setTab("audio");
                 return;
               }
@@ -4801,6 +4987,20 @@ export function StudioEditor({
             nestDepth: nestPath.length,
             onExitCompound: exitCompound,
             onEnterCompound: enterCompound,
+            playing,
+            muted,
+            useProxy,
+            guidesThirds: guides.thirds,
+            onTogglePlay: togglePlay,
+            onToggleMute: toggleMute,
+            onToggleProxy: () => setUseProxy((v) => !v),
+            onToggleGuides: () =>
+              setGuides((g) => ({ ...g, thirds: !g.thirds })),
+            onDeleteSelection: () => {
+              if (selectedTextId) deleteText(selectedTextId);
+              else if (selectedId) deleteClip(selectedId);
+            },
+            canDeleteSelection: Boolean(selectedId || selectedTextId),
           }}
         />
 
@@ -4968,7 +5168,7 @@ export function StudioEditor({
               return t;
             });
             setTexts((prev) => [...prev, ...added]);
-            setSidebarTab("text");
+            setSidebarTab("ai");
             pushToast(`${lang} captions added (${added.length})`, "success");
           }}
           onApplyDubTracks={applyDubTracks}
@@ -4979,20 +5179,20 @@ export function StudioEditor({
             setShowGrowthHub(false);
             switch (action) {
               case "captions":
-                setSidebarTab("text");
+                setSidebarTab("ai");
                 break;
               case "reframe":
                 void runAiReframe();
                 break;
               case "music":
-                setSidebarTab("audio");
+                setSidebarTab("media");
                 setTab("audio");
                 break;
               case "cleanup":
                 setSidebarTab("cleanup");
                 break;
               case "transcript":
-                setSidebarTab("transcript");
+                setSidebarTab("ai");
                 break;
               case "analyze":
                 void runAiAnalyze();
@@ -5011,6 +5211,7 @@ export function StudioEditor({
             pushToast={pushToast}
           />
         )}
+        {showManual && <StudioManual onClose={() => setShowManual(false)} />}
       </div>
     </div>
   );

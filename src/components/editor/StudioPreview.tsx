@@ -4,7 +4,6 @@ import { forwardRef, useState, type MutableRefObject, type ReactNode, type Ref }
 import type { MusicTrack, ProjectAsset, TextOverlay, TimelineClip } from "@/lib/editor-types";
 import { TextLayer } from "@/components/editor/TextLayer";
 import { WebGLFxPreview } from "@/components/editor/WebGLFxPreview";
-import { AudioMeter } from "@/components/editor/AudioMeter";
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (!ref) return;
@@ -39,6 +38,8 @@ type Props = {
   previewTransform: (c: TimelineClip | null, localT?: number) => string | undefined;
   previewOpacity: (c: TimelineClip | null, localT?: number) => number;
   assetUrl: (a: ProjectAsset, opts?: { full?: boolean }) => string;
+  /** Resolve clip-layer media for stacked preview. */
+  assetById?: Map<string, ProjectAsset>;
   overlayHidden: boolean;
   overlayMuted: boolean;
   visibleOverlays: PreviewOverlayItem[];
@@ -108,6 +109,7 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
     previewTransform,
     previewOpacity,
     assetUrl,
+    assetById,
     overlayHidden,
     overlayMuted,
     visibleOverlays,
@@ -399,6 +401,35 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
                 />
               );
             })}
+
+          {activeClip &&
+            assetById &&
+            (activeClip.layers || [])
+              .filter((l) => l.enabled !== false && l.assetId)
+              .map((layer) => {
+                const asset = assetById.get(layer.assetId!);
+                if (!asset || (asset.kind !== "image" && asset.kind !== "video")) return null;
+                const opacity = layer.opacity ?? 1;
+                return asset.kind === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={layer.id}
+                    className="preview-overlay clip-layer-overlay"
+                    src={assetUrl(asset)}
+                    alt=""
+                    style={{ opacity }}
+                  />
+                ) : (
+                  <video
+                    key={layer.id}
+                    className="preview-overlay clip-layer-overlay"
+                    src={`${assetUrl(asset)}#t=${activeLocalT.toFixed(2)}`}
+                    muted
+                    playsInline
+                    style={{ opacity }}
+                  />
+                );
+              })}
         </div>
 
         {/* Adjustment layers: soft-light grade wash over the program stack */}
@@ -469,61 +500,6 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
           hidden
         />
       ))}
-
-      <div className="studio-transport cc-transport">
-        <div className="transport-center">
-          <div className="transport-row">
-            <button className="btn round sm" onClick={onPlayReverse} title="Back (J)">
-              ‹‹
-            </button>
-            <button
-              className="btn round play-main"
-              onClick={onTogglePlay}
-              title="Play / pause (Space)"
-            >
-              {playing ? "❚❚" : "▶"}
-            </button>
-            <button className="btn round sm" onClick={onStop} title="Stop (K)">
-              ■
-            </button>
-            <button className="btn round sm" onClick={onPlayForward} title="Forward (L)">
-              ››
-            </button>
-          </div>
-          <div className="transport-meta">
-            <span className="studio-time">
-              {fmt(current)} <em>/ {fmt(total)}</em>
-            </span>
-            <AudioMeter media={videoEl} />
-          </div>
-        </div>
-
-        <div className="preview-toolbar cc-preview-mini" aria-label="Preview options">
-          <button
-            className={guides.thirds ? "btn tiny on" : "btn tiny"}
-            onClick={() => setGuides((g) => ({ ...g, thirds: !g.thirds }))}
-            title="Guides"
-          >
-            Guides
-          </button>
-          <button
-            className={muted ? "btn tiny on" : "btn tiny"}
-            onClick={onToggleMute}
-            title="Mute (M)"
-          >
-            {muted ? "Mute" : "Sound"}
-          </button>
-          {onToggleProxy && (
-            <button
-              className={useProxy ? "btn tiny on" : "btn tiny"}
-              onClick={onToggleProxy}
-              title="Preview quality"
-            >
-              {useProxy ? "Proxy" : "Full"}
-            </button>
-          )}
-        </div>
-      </div>
     </div>
   );
 });

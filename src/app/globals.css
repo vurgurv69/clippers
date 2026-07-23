@@ -1282,37 +1282,128 @@ body::before {
 }
 
 @media (max-width: 700px) {
+  .page,
+  .hero,
+  .hero-copy,
+  .hero-main,
+  .studio {
+    max-width: 100%;
+  }
+
+  .hero {
+    min-height: 100svh;
+    align-items: start;
+    overflow-x: clip;
+    padding: max(0.85rem, env(safe-area-inset-top))
+      max(1rem, env(safe-area-inset-right))
+      max(1.5rem, env(safe-area-inset-bottom))
+      max(1rem, env(safe-area-inset-left));
+  }
+
+  .hero-copy {
+    width: 100%;
+    padding-bottom: 0.5rem;
+    gap: 0.15rem;
+    overflow-x: clip;
+  }
+
+  .brand {
+    align-self: stretch;
+    width: 100%;
+    max-width: 100%;
+    margin: 0.15rem 0 0.75rem;
+    /* Fit “CLIPPERS” inside ~390px without forcing page overflow */
+    font-size: min(11.4vw, 3.15rem);
+    line-height: 0.9;
+    letter-spacing: -0.06em;
+    text-align: center;
+  }
+
+  .hero-main {
+    width: 100%;
+    max-width: none;
+  }
+
+  .headline {
+    max-width: none;
+    font-size: clamp(1.15rem, 5.2vw, 1.45rem);
+    margin-bottom: 0.5rem;
+  }
+
+  .lede {
+    max-width: none;
+    font-size: 0.92rem;
+    line-height: 1.4;
+    margin-bottom: 1.1rem;
+    padding-inline: 0.1rem;
+  }
+
+  .studio,
+  .studio-opts {
+    max-width: none;
+  }
+
   .url-form {
     flex-direction: column;
     border-radius: 22px;
     padding: 0.55rem;
+    gap: 0.45rem;
+  }
+
+  .url-form input {
+    min-height: 3rem;
+    font-size: 1rem;
+    padding: 0.85rem 1rem;
   }
 
   .url-form button {
     width: 100%;
+    min-height: 3rem;
+    border-radius: 16px;
+    font-size: 0.95rem;
   }
 
-  .phone-a {
-    right: -4%;
-    top: 6%;
-    opacity: 0.9;
+  .studio-actions {
+    flex-wrap: wrap;
+    gap: 0.55rem;
   }
 
-  .phone-b {
-    right: 28%;
-    top: 10%;
-    opacity: 0.55;
+  .studio-opts {
+    margin-top: 1rem;
+    gap: 0.65rem;
   }
 
-  .phone-c {
-    right: 2%;
-    top: 48%;
-    opacity: 0.7;
+  .opt-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+
+  .opt-row span {
+    font-size: 0.72rem;
+  }
+
+  .opt-row select {
+    min-height: 2.85rem;
+    font-size: 1rem;
+    border-radius: 14px;
+    padding: 0.7rem 0.85rem;
+  }
+
+  .more-toggle {
+    min-height: 2.75rem;
+    width: 100%;
+    max-width: 16rem;
+    margin-top: 0.35rem;
+  }
+
+  /* Atmosphere only — no overlapping UI chrome on phones */
+  .phone {
+    display: none;
   }
 
   .hero-left {
-    width: min(55vw, 260px);
-    opacity: 0.75;
+    width: min(70vw, 280px);
+    opacity: 0.45;
   }
 
   .hero-marquee {
@@ -1320,21 +1411,70 @@ body::before {
   }
 
   .hero-slash {
-    font-size: clamp(5.5rem, 28vw, 9rem);
-    left: 6%;
-    bottom: 28%;
+    display: none;
   }
 
   .hero-lens {
-    left: -22%;
-    top: 4%;
-    width: min(240px, 58vw);
+    left: -28%;
+    top: -4%;
+    width: min(220px, 55vw);
   }
 
   .hero-lens-b {
-    left: 18%;
-    top: 28%;
-    width: min(170px, 42vw);
+    left: 8%;
+    top: 18%;
+    width: min(150px, 38vw);
+    opacity: 0.55;
+  }
+
+  .studio-section {
+    padding: 2rem max(1rem, env(safe-area-inset-right))
+      max(3rem, env(safe-area-inset-bottom))
+      max(1rem, env(safe-area-inset-left));
+  }
+
+  .studio-section-head h2 {
+    font-size: clamp(1.35rem, 6vw, 1.85rem);
+  }
+
+  .studio-section-head p {
+    font-size: 0.95rem;
+    margin-bottom: 1.15rem;
+  }
+
+  .launcher-drop {
+    padding: 1.35rem 1rem;
+    border-radius: 18px;
+  }
+
+  .launcher-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .launcher-actions .btn,
+  .launcher-actions button {
+    width: 100%;
+    min-height: 2.85rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .brand {
+    font-size: min(11.5vw, 2.85rem);
+  }
+
+  .headline {
+    font-size: 1.1rem;
+  }
+
+  .lede {
+    font-size: 0.88rem;
+  }
+
+  .phone-a,
+  .phone-c {
+    display: none;
   }
 }
 

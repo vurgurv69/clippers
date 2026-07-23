@@ -1,9 +1,16 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Figtree, Syne, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import "./globals-nle-extra.css";
 /* CapCut visual system supersedes studio-pro chrome */
 import "./globals-capcut.css";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#e8eef2",
+};
 
 const syne = Syne({
   variable: "--font-syne",

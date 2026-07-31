@@ -27,7 +27,15 @@ function runCurl(args: string[]): Promise<{ code: number; stdout: string; stderr
   });
 }
 
-async function curlJson(url: string, referer?: string): Promise<unknown> {
+async function curlJson(
+  url: string,
+  opts: {
+    referer?: string;
+    method?: "GET" | "POST";
+    body?: string;
+    headers?: string[];
+  } = {},
+): Promise<unknown> {
   const args = [
     "-4",
     "-sS",
@@ -37,10 +45,13 @@ async function curlJson(url: string, referer?: string): Promise<unknown> {
     "-A",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "-H",
-    "Accept: application/json",
+    "Accept: application/json, text/plain, */*",
   ];
-  if (referer) {
-    args.push("-H", `Referer: ${referer}`);
+  if (opts.referer) args.push("-H", `Referer: ${opts.referer}`);
+  for (const h of opts.headers || []) args.push("-H", h);
+  if (opts.method === "POST") {
+    args.push("-X", "POST");
+    if (opts.body) args.push("-d", opts.body);
   }
   args.push(url);
 
@@ -106,6 +117,61 @@ function normalizeTikTokUrl(input: string): string {
   }
 }
 
+function normalizeInstagramUrl(input: string): string {
+  try {
+    const u = new URL(input.trim());
+    const m = u.pathname.match(/\/(reel|reels|p|tv)\/([^/?#]+)/i);
+    if (m) {
+      const kind = m[1].toLowerCase() === "reels" ? "reel" : m[1].toLowerCase();
+      return `https://www.instagram.com/${kind}/${m[2]}/`;
+    }
+    return u.toString();
+  } catch {
+    return input.trim();
+  }
+}
+
+function pickMp4Url(value: unknown, depth = 0): string | null {
+  if (depth > 8 || value == null) return null;
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (/^https?:\/\//i.test(s) && (/\.mp4(\?|$)/i.test(s) || /video/i.test(s))) {
+      return s;
+    }
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = pickMp4Url(item, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    for (const key of [
+      "hdplay",
+      "play",
+      "videoUrl",
+      "video_url",
+      "download_url",
+      "downloadUrl",
+      "url",
+      "tunnel",
+      "media",
+      "source",
+    ]) {
+      const hit = pickMp4Url(obj[key], depth + 1);
+      if (hit) return hit;
+    }
+    for (const v of Object.values(obj)) {
+      const hit = pickMp4Url(v, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 async function resolveViaTikWm(
   tiktokUrl: string,
 ): Promise<{ title: string; videoUrl: string }> {
@@ -117,7 +183,9 @@ async function resolveViaTikWm(
   let last = "tikwm failed";
   for (const endpoint of endpoints) {
     try {
-      const raw = (await curlJson(endpoint, "https://www.tikwm.com/")) as {
+      const raw = (await curlJson(endpoint, {
+        referer: "https://www.tikwm.com/",
+      })) as {
         code?: number;
         msg?: string;
         data?: {
@@ -131,7 +199,6 @@ async function resolveViaTikWm(
         last = raw.msg || `tikwm code ${raw.code}`;
         continue;
       }
-      // Prefer HD no-watermark; never use wmplay
       const videoUrl = raw.data.hdplay || raw.data.play;
       if (!videoUrl) {
         last = "No HD/play URL in response";
@@ -148,16 +215,34 @@ async function resolveViaTikWm(
   throw new Error(last);
 }
 
-/** Cobalt — TikTok + Instagram (and more) at max quality when available. */
+/** Cobalt — only when an instance accepts us (optional API key). */
 async function resolveViaCobalt(
   mediaUrl: string,
   fallbackTitle: string,
 ): Promise<{ title: string; videoUrl: string }> {
   const clean = mediaUrl.trim();
+  const envHost = process.env.COBALT_API_URL?.trim();
+  const apiKey =
+    process.env.COBALT_API_KEY?.trim() ||
+    process.env.COBALT_API_TOKEN?.trim() ||
+    "";
   const hosts = [
-    "https://cobalt-api.kwiatekmieniany.pl/",
-    "https://api.cobalt.tools/",
+    ...(envHost ? [envHost.endsWith("/") ? envHost : `${envHost}/`] : []),
+    // Public instances often require JWT now — skipped unless key is set
+    ...(apiKey
+      ? [
+          "https://api.cobalt.tools/",
+          "https://cobalt-api.kwiatekmieniany.pl/",
+        ]
+      : []),
   ];
+
+  if (!hosts.length) {
+    throw new Error(
+      "cobalt skipped (set COBALT_API_URL + COBALT_API_KEY for Cobalt)",
+    );
+  }
+
   let last = "cobalt failed";
 
   for (const host of hosts) {
@@ -168,8 +253,7 @@ async function resolveViaCobalt(
     );
     try {
       await fs.mkdir(path.dirname(tmpJson), { recursive: true });
-      // Prefer max / 1080 no-watermark style streams
-      for (const quality of ["max", "2160", "1440", "1080"] as const) {
+      for (const quality of ["max", "1080", "720"] as const) {
         const body = JSON.stringify({
           url: clean,
           videoQuality: quality,
@@ -188,12 +272,13 @@ async function resolveViaCobalt(
           "Content-Type: application/json",
           "-H",
           "Accept: application/json",
-          "-d",
-          body,
-          "-o",
-          tmpJson,
-          host,
         ];
+        if (apiKey) {
+          const scheme = apiKey.includes(".") ? "Bearer" : "Api-Key";
+          args.push("-H", `Authorization: ${scheme} ${apiKey}`);
+        }
+        args.push("-d", body, "-o", tmpJson, host);
+
         const { code, stderr } = await runCurl(args);
         if (code !== 0) {
           last = stderr.trim() || `curl exit ${code}`;
@@ -202,14 +287,23 @@ async function resolveViaCobalt(
         const raw = JSON.parse(await fs.readFile(tmpJson, "utf8")) as {
           status?: string;
           url?: string;
-          tunnel?: string;
+          tunnel?: string | string[];
           filename?: string;
           error?: { code?: string };
           text?: string;
         };
-        const videoUrl = raw.url || raw.tunnel;
+        const tunnel = Array.isArray(raw.tunnel) ? raw.tunnel[0] : raw.tunnel;
+        const videoUrl = raw.url || tunnel;
         if (!videoUrl) {
-          last = raw.error?.code || raw.text || `status ${raw.status}`;
+          const codeStr = raw.error?.code || raw.text || `status ${raw.status}`;
+          last = codeStr;
+          // Don't keep hammering JWT-gated hosts without a key
+          if (
+            String(codeStr).includes("jwt") ||
+            String(codeStr).includes("auth")
+          ) {
+            break;
+          }
           continue;
         }
         return {
@@ -224,6 +318,101 @@ async function resolveViaCobalt(
     }
   }
   throw new Error(last);
+}
+
+/** Generic “paste URL → get mp4” helpers used by many free download sites. */
+async function resolveViaAjaxSearch(
+  endpoint: string,
+  mediaUrl: string,
+  fallbackTitle: string,
+  referer: string,
+): Promise<{ title: string; videoUrl: string }> {
+  const body = `q=${encodeURIComponent(mediaUrl)}&t=media&lang=en`;
+  const raw = await curlJson(endpoint, {
+    method: "POST",
+    body,
+    referer,
+    headers: [
+      "Content-Type: application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With: XMLHttpRequest",
+    ],
+  });
+  const videoUrl = pickMp4Url(raw);
+  if (!videoUrl) {
+    throw new Error(`No video in ${new URL(endpoint).hostname}`);
+  }
+  return { title: fallbackTitle, videoUrl };
+}
+
+async function resolveViaInstaSaveSites(
+  instagramUrl: string,
+): Promise<{ title: string; videoUrl: string }> {
+  const clean = normalizeInstagramUrl(instagramUrl);
+  const attempts: Array<{
+    name: string;
+    fn: () => Promise<{ title: string; videoUrl: string }>;
+  }> = [
+    {
+      name: "saveig",
+      fn: () =>
+        resolveViaAjaxSearch(
+          "https://v3.saveig.app/api/ajaxSearch",
+          clean,
+          "Instagram video",
+          "https://saveig.app/",
+        ),
+    },
+    {
+      name: "snapinsta",
+      fn: () =>
+        resolveViaAjaxSearch(
+          "https://snapinsta.to/api/ajaxSearch",
+          clean,
+          "Instagram video",
+          "https://snapinsta.to/",
+        ),
+    },
+    {
+      name: "igram",
+      fn: async () => {
+        const raw = await curlJson("https://api.igram.world/api/convert", {
+          method: "POST",
+          body: JSON.stringify({ url: clean }),
+          headers: ["Content-Type: application/json"],
+          referer: "https://igram.world/",
+        });
+        const videoUrl = pickMp4Url(raw);
+        if (!videoUrl) throw new Error("igram: no video");
+        return { title: "Instagram video", videoUrl };
+      },
+    },
+    {
+      name: "fastdl",
+      fn: async () => {
+        const raw = await curlJson("https://fastdl.app/api/convert", {
+          method: "POST",
+          body: JSON.stringify({ url: clean }),
+          headers: ["Content-Type: application/json"],
+          referer: "https://fastdl.app/",
+        });
+        const videoUrl = pickMp4Url(raw);
+        if (!videoUrl) throw new Error("fastdl: no video");
+        return { title: "Instagram video", videoUrl };
+      },
+    },
+  ];
+
+  const errors: string[] = [];
+  for (const { name, fn } of attempts) {
+    try {
+      return await fn();
+    } catch (err) {
+      errors.push(
+        `${name}: ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`,
+      );
+    }
+  }
+  throw new Error(errors.join(" | ") || "instagram helpers failed");
 }
 
 async function ensureCurl() {
@@ -280,25 +469,43 @@ export async function downloadTikTokNoWatermark(
 }
 
 /**
- * Instagram Reels / posts via Cobalt (no watermark when the source allows).
+ * Instagram Reels / posts — try scrapers, then optional Cobalt with API key.
  */
 export async function downloadInstagramHd(
   instagramUrl: string,
   outPath: string,
 ): Promise<{ title: string }> {
   await ensureCurl();
+  const clean = normalizeInstagramUrl(instagramUrl);
 
-  try {
-    const { title, videoUrl } = await resolveViaCobalt(
-      instagramUrl,
-      "Instagram video",
-    );
-    await curlDownloadFile(videoUrl, outPath, "https://www.instagram.com/");
-    return { title: title || "Instagram video" };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Could not pull Instagram HD automatically (${msg}). Use a public Reel/post link, or upload an MP4.`,
-    );
+  const errors: string[] = [];
+  const resolvers: Array<{
+    name: string;
+    fn: () => Promise<{ title: string; videoUrl: string }>;
+  }> = [
+    { name: "helpers", fn: () => resolveViaInstaSaveSites(clean) },
+    {
+      name: "cobalt",
+      fn: () => resolveViaCobalt(clean, "Instagram video"),
+    },
+  ];
+
+  for (const { name, fn } of resolvers) {
+    try {
+      const { title, videoUrl } = await fn();
+      await curlDownloadFile(videoUrl, outPath, "https://www.instagram.com/");
+      return { title: title || "Instagram video" };
+    } catch (err) {
+      errors.push(
+        `${name}: ${err instanceof Error ? err.message : String(err)}`.slice(
+          0,
+          220,
+        ),
+      );
+    }
   }
+
+  throw new Error(
+    `Could not pull Instagram HD automatically (${errors.join(" | ")}).`,
+  );
 }

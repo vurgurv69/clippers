@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 import { ffmpegPath, ffprobePath, runCommand, ytDlpPath } from "./binaries";
 import { jobDir } from "./jobs";
@@ -8,6 +9,21 @@ import {
 } from "./tiktok-api";
 import { readCachedDownload, writeCachedDownload } from "./download-cache";
 import type { DownloadHint } from "./types";
+
+/** Optional Netscape cookies.txt for Instagram / YouTube / TikTok (env path). */
+function cookiesArgs(): string[] {
+  const fromEnv =
+    process.env.YTDLP_COOKIES?.trim() ||
+    process.env.COOKIES_FILE?.trim() ||
+    process.env.INSTAGRAM_COOKIES?.trim() ||
+    "";
+  if (fromEnv && fsSync.existsSync(fromEnv)) {
+    return ["--cookies", fromEnv];
+  }
+  const local = path.join(process.cwd(), "tools", "cookies.txt");
+  if (fsSync.existsSync(local)) return ["--cookies", local];
+  return [];
+}
 
 export type DownloadedVideo = {
   videoPath: string;
@@ -312,9 +328,50 @@ function buildAttempts(
     "after_move:%(title)s|||%(filepath)s",
   ];
 
-  if (platform === "tiktok" || platform === "instagram") {
-    // Skip yt-dlp — dedicated no-watermark / HD helpers in downloadVideo().
-    return [];
+  const cookies = cookiesArgs();
+
+  if (platform === "tiktok") {
+    // Helpers (tikwm) run first in downloadVideo(); yt-dlp is a fallback.
+    return [
+      {
+        label: "tiktok impersonate",
+        args: [
+          ...base,
+          ...cookies,
+          "--impersonate",
+          "chrome",
+          "-f",
+          "b/bv*+ba/best",
+          url,
+        ],
+      },
+      {
+        label: "tiktok best",
+        args: [...base, ...cookies, "-f", "b/best", url],
+      },
+    ];
+  }
+
+  if (platform === "instagram") {
+    // Public Reels often need cookies; try impersonate then plain.
+    return [
+      {
+        label: "instagram impersonate",
+        args: [
+          ...base,
+          ...cookies,
+          "--impersonate",
+          "chrome",
+          "-f",
+          HQ_FORMAT,
+          url,
+        ],
+      },
+      {
+        label: "instagram best",
+        args: [...base, ...cookies, "-f", "b/best", url],
+      },
+    ];
   }
 
   if (platform === "youtube") {
@@ -323,6 +380,7 @@ function buildAttempts(
         label: "android/ios HQ",
         args: [
           ...base,
+          ...cookies,
           "--extractor-args",
           "youtube:player_client=android,ios",
           "-f",
@@ -334,6 +392,7 @@ function buildAttempts(
         label: "tv/android HQ",
         args: [
           ...base,
+          ...cookies,
           "--extractor-args",
           "youtube:player_client=tv_embedded,android",
           "-f",
@@ -342,11 +401,12 @@ function buildAttempts(
         ],
       },
       {
-        label: "web + mweb HQ",
+        label: "mweb/web HQ",
         args: [
           ...base,
+          ...cookies,
           "--extractor-args",
-          "youtube:player_client=web,mweb",
+          "youtube:player_client=mweb,web",
           "-f",
           HQ_FORMAT,
           url,
@@ -356,6 +416,7 @@ function buildAttempts(
         label: "android progressive fallback",
         args: [
           ...base,
+          ...cookies,
           "--extractor-args",
           "youtube:player_client=android",
           "-f",
@@ -370,14 +431,15 @@ function buildAttempts(
   return [
     {
       label: "best HQ",
-      args: [...base, "-f", HQ_FORMAT, url],
+      args: [...base, ...cookies, "-f", HQ_FORMAT, url],
     },
     {
       label: "impersonate chrome",
       args: [
         ...base,
+        ...cookies,
         "--impersonate",
-        "chrome-131:android-14",
+        "chrome",
         "-f",
         "bv*+ba/b/best",
         url,
@@ -417,25 +479,27 @@ export async function downloadVideo(
   let downloaded = false;
   const errors: string[] = [];
 
-  for (const attempt of buildAttempts(ff, outTemplate, url, platform)) {
-    await clearPartialDownloads(dir);
-    try {
-      const result = await runCommand(ytDlpPath(), attempt.args);
-      stdout = result.stdout;
-      const files = await listMedia(dir);
-      if (files.length) {
-        downloaded = true;
-        break;
+  async function tryYtdlp(p: Platform) {
+    for (const attempt of buildAttempts(ff, outTemplate, url, p)) {
+      await clearPartialDownloads(dir);
+      try {
+        const result = await runCommand(ytDlpPath(), attempt.args);
+        stdout = result.stdout;
+        if ((await listMedia(dir)).length) {
+          downloaded = true;
+          return;
+        }
+        lastError = `Attempt "${attempt.label}" finished with no files.`;
+        errors.push(lastError);
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        errors.push(`[${attempt.label}] ${lastError.slice(0, 240)}`);
       }
-      lastError = `Attempt "${attempt.label}" finished with no files.`;
-      errors.push(lastError);
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      errors.push(`[${attempt.label}] ${lastError.slice(0, 240)}`);
     }
   }
 
-  if (!downloaded && platform === "tiktok") {
+  // TikTok: HD no-watermark APIs first, then yt-dlp
+  if (platform === "tiktok") {
     try {
       await clearPartialDownloads(dir);
       const finalPath = path.join(dir, "source.mp4");
@@ -451,20 +515,20 @@ export async function downloadVideo(
         title,
         duration,
       });
-      return {
-        videoPath: finalPath,
-        title,
-        duration,
-      };
+      return { videoPath: finalPath, title, duration };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `${msg}\n\nUse the Upload MP4 button — TikTok is blocked on this network.`,
+      errors.push(
+        `[tiktok-api] ${(err instanceof Error ? err.message : String(err)).slice(0, 240)}`,
       );
+      await tryYtdlp("tiktok");
+      if (!downloaded) {
+        throw new Error(
+          `TikTok download failed.\nPaste a public TikTok link, or upload an MP4.\n${errors.slice(-4).join("\n").slice(0, 900)}`,
+        );
+      }
     }
-  }
-
-  if (!downloaded && platform === "instagram") {
+  } else if (platform === "instagram") {
+    // Instagram: scrapers / optional Cobalt key, then yt-dlp (+ cookies)
     try {
       await clearPartialDownloads(dir);
       const finalPath = path.join(dir, "source.mp4");
@@ -480,48 +544,30 @@ export async function downloadVideo(
         title,
         duration,
       });
-      return {
-        videoPath: finalPath,
-        title,
-        duration,
-      };
+      return { videoPath: finalPath, title, duration };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Last resort: yt-dlp for Instagram
-      try {
-        await clearPartialDownloads(dir);
-        await runCommand(ytDlpPath(), [
-          ...COMMON_ARGS(ff),
-          "--merge-output-format",
-          "mp4",
-          "-o",
-          outTemplate,
-          "-f",
-          HQ_FORMAT,
-          "--impersonate",
-          "chrome-131:android-14",
-          url,
-        ]);
-        downloaded = (await listMedia(dir)).length > 0;
-        if (!downloaded) throw new Error(msg);
-      } catch {
+      errors.push(
+        `[instagram-api] ${(err instanceof Error ? err.message : String(err)).slice(0, 280)}`,
+      );
+      await tryYtdlp("instagram");
+      if (!downloaded) {
         throw new Error(
-          `${msg}\n\nUse a public Instagram Reel/post link, or upload an MP4.`,
+          `Instagram download failed.\nUse a public Reel/post link, or upload an MP4.\n${errors.slice(-5).join("\n").slice(0, 900)}`,
         );
       }
     }
-  }
-
-  if (!downloaded) {
-    const tip =
-      platform === "youtube"
-        ? "YouTube tip: try again in a minute, or paste a different public link."
-        : platform === "instagram"
-          ? "Instagram tip: use a public Reel/post URL, or tap Instagram HD."
+  } else {
+    // YouTube + other sites via yt-dlp
+    await tryYtdlp(platform);
+    if (!downloaded) {
+      const tip =
+        platform === "youtube"
+          ? "YouTube tip: try again in a minute, or paste a different public link."
           : "Tip: make sure the link is public — or upload an MP4.";
-    throw new Error(
-      `Download failed (${platform}).\n${tip}\n${errors.slice(-4).join("\n").slice(0, 900)}`,
-    );
+      throw new Error(
+        `Download failed (${platform}).\n${tip}\n${errors.slice(-4).join("\n").slice(0, 900)}`,
+      );
+    }
   }
 
   const files = await listMedia(dir);

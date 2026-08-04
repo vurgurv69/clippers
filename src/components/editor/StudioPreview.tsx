@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode, type Ref } from "react";
+import { usePlaybackClock } from "@/hooks/studio/playbackClock";
 import type { MusicTrack, ProjectAsset, TextOverlay, TimelineClip } from "@/lib/editor-types";
 import { TextLayer } from "@/components/editor/TextLayer";
 import { WebGLFxPreview } from "@/components/editor/WebGLFxPreview";
@@ -196,7 +197,7 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
     overlayHidden,
     overlayMuted,
     visibleOverlays,
-    current,
+    current: currentProp,
     visibleTexts,
     selectedTextId,
     projectId,
@@ -234,19 +235,57 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
   },
   ref,
 ) {
+  // Isolate playhead time from the throttled shell `current` prop.
+  const current = usePlaybackClock();
+  void currentProp;
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const [mediaBusy, setMediaBusy] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const triedFullRef = useRef(false);
-    // Kept for parent API / future frame jog; transport uses Back/Play/Stop/Forward.
-    void onStepFrame;
-    void rate;
-    void dir;
-    void loop;
-    void fps;
-    void onSetRate;
-    void onSetDir;
-    void onToggleLoop;
+  // Kept for parent API / future frame jog; transport uses Back/Play/Stop/Forward.
+  void onStepFrame;
+  void rate;
+  void dir;
+  void loop;
+  void fps;
+  void onSetRate;
+  void onSetDir;
+  void onToggleLoop;
+  const programRef = useRef<HTMLDivElement>(null);
+  const [fitRect, setFitRect] = useState({ left: 0, top: 0, width: 0, height: 0 });
+
+  // Letterbox-aware rect so watermark covers sit on the video, not the black bars.
+  useEffect(() => {
+    const el = programRef.current;
+    if (!el) return;
+    const update = () => {
+      const cw = el.clientWidth;
+      const ch = el.clientHeight;
+      if (cw < 2 || ch < 2) return;
+      const ar = Math.max(0.2, aspectW) / Math.max(0.2, aspectH);
+      const boxAr = cw / ch;
+      let width: number;
+      let height: number;
+      let left: number;
+      let top: number;
+      if (boxAr > ar) {
+        height = ch;
+        width = ch * ar;
+        left = (cw - width) / 2;
+        top = 0;
+      } else {
+        width = cw;
+        height = cw / ar;
+        left = 0;
+        top = (ch - height) / 2;
+      }
+      setFitRect({ left, top, width, height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [aspectW, aspectH]);
 
   useEffect(() => {
     setMediaError(null);
@@ -451,7 +490,7 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
 
   return (
     <div className="studio-stage cc-stage" ref={ref}>
-      <div className="cc-phone-wrap">
+      <div className="cc-phone-wrap cc-stage-fill">
         <button
           type="button"
           className="cc-fs-corner"
@@ -461,13 +500,12 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
           ⛶
         </button>
       <div
-        className={`studio-preview cc-phone${aspectH > aspectW ? " portrait" : " landscape"}${dragOver ? " drag" : ""}`}
-        style={{ aspectRatio: `${aspectW} / ${aspectH}` }}
+        className={`studio-preview cc-phone fill-stage${dragOver ? " drag" : ""}`}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
-        <div className="preview-program">
+        <div className="preview-program" ref={programRef}>
           <video
             ref={(node) => {
               setVideoEl(node);
@@ -620,6 +658,62 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
               className="preview-vignette"
               style={{ opacity: Math.min(1, activeClip.color.vignette) }}
             />
+          )}
+
+          {activeClip && fitRect.width > 0 && (
+            <div
+              className="preview-delogo-layer"
+              style={{
+                position: "absolute",
+                left: fitRect.left,
+                top: fitRect.top,
+                width: fitRect.width,
+                height: fitRect.height,
+                zIndex: 7,
+                pointerEvents: "none",
+              }}
+              aria-hidden
+            >
+              {(activeClip.effects || [])
+                .filter((f) => f.enabled && f.kind === "delogo")
+                .flatMap((fx) => {
+                  if (fx.boxes?.length) {
+                    return fx.boxes.map((b, i) => (
+                      <div
+                        key={`${fx.id}-${i}`}
+                        className="preview-delogo"
+                        title={b.label || "Watermark"}
+                        style={{
+                          left: `${Math.max(0, Math.min(100, b.x * 100))}%`,
+                          top: `${Math.max(0, Math.min(100, b.y * 100))}%`,
+                          width: `${Math.max(2, Math.min(100, b.w * 100))}%`,
+                          height: `${Math.max(1.5, Math.min(100, b.h * 100))}%`,
+                        }}
+                      />
+                    ));
+                  }
+                  const a = Math.max(0, Math.min(100, fx.amount ?? 45)) / 100;
+                  const wPct = 16 + a * 22;
+                  const hPct = 10 + a * 16;
+                  const pad = 1.5;
+                  const corner = fx.corner || "br";
+                  const pos: CSSProperties =
+                    corner === "tl"
+                      ? { top: `${pad}%`, left: `${pad}%` }
+                      : corner === "tr"
+                        ? { top: `${pad}%`, right: `${pad}%` }
+                        : corner === "bl"
+                          ? { bottom: `${pad}%`, left: `${pad}%` }
+                          : { bottom: `${pad}%`, right: `${pad}%` };
+                  return [
+                    <div
+                      key={fx.id}
+                      className="preview-delogo"
+                      style={{ ...pos, width: `${wPct}%`, height: `${hPct}%` }}
+                    />,
+                  ];
+                })}
+            </div>
           )}
 
           {!overlayHidden &&

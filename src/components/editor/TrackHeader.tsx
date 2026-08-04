@@ -4,7 +4,7 @@ import type { TrackChrome } from "@/lib/editor-types";
 
 export type { TrackChrome };
 
-/** Compact lane header: rename, lock, mute, solo, hide, collapse, height. */
+/** Compact lane header: name + lock + mute only. */
 export function TrackHeader({
   track,
   onPatch,
@@ -15,24 +15,12 @@ export function TrackHeader({
   count: number;
 }) {
   return (
-    <div className={`track-header${track.collapsed ? " collapsed" : ""}`}>
-      <button
-        type="button"
-        className="th-btn"
-        title={track.collapsed ? "Expand track" : "Collapse track"}
-        aria-label={track.collapsed ? "Expand" : "Collapse"}
-        onClick={() => onPatch({ collapsed: !track.collapsed })}
-      >
-        {track.collapsed ? "▸" : "▾"}
-      </button>
+    <div className={`track-header th-clean${track.collapsed ? " collapsed" : ""}`}>
       <span className="th-swatch" style={{ background: track.color }} />
-      <input
-        className="th-name"
-        value={track.name}
-        onChange={(e) => onPatch({ name: e.target.value })}
-        aria-label="Track name"
-      />
-      <span className="th-count">{count}</span>
+      <span className="th-name-static" title={track.name}>
+        {track.name}
+        {count > 0 ? <em>{count}</em> : null}
+      </span>
       <button
         className={track.locked ? "th-btn on" : "th-btn"}
         title="Lock track"
@@ -45,34 +33,8 @@ export function TrackHeader({
         title="Mute track"
         onClick={() => onPatch({ muted: !track.muted })}
       >
-        {track.muted ? "M" : "M"}
+        M
       </button>
-      <button
-        className={track.solo ? "th-btn on" : "th-btn"}
-        title="Solo track"
-        onClick={() => onPatch({ solo: !track.solo })}
-      >
-        S
-      </button>
-      <button
-        className={track.hidden ? "th-btn on" : "th-btn"}
-        title="Hide track"
-        onClick={() => onPatch({ hidden: !track.hidden })}
-      >
-        {track.hidden ? "◌" : "●"}
-      </button>
-      {!track.collapsed && (
-        <input
-          className="th-height"
-          type="range"
-          min={28}
-          max={110}
-          value={track.height}
-          onChange={(e) => onPatch({ height: Number(e.target.value) })}
-          title="Track height"
-          aria-label="Track height"
-        />
-      )}
     </div>
   );
 }

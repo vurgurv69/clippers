@@ -1,12 +1,12 @@
 "use client";
 
 import { clipLane, clipLength, type MusicTrack, type TimelineClip } from "@/lib/editor-types";
+import { usePlaybackClock } from "@/hooks/studio/playbackClock";
 
 export function TimelineMinimap({
   clips,
   starts,
   total,
-  current,
   selectedIds,
   music,
   mainColor,
@@ -16,13 +16,13 @@ export function TimelineMinimap({
   clips: TimelineClip[];
   starts: number[];
   total: number;
-  current: number;
   selectedIds: string[];
   music: MusicTrack | null;
   mainColor: string;
   overlayColor: string;
   onJump: (time: number, scrollFrac: number) => void;
 }) {
+  const current = usePlaybackClock();
   return (
     <div
       className="timeline-minimap"

@@ -294,6 +294,49 @@ export function useStudioAi(args: StudioAiArgs) {
     [projectId, pushToast, setSidebarTab, seek],
   );
 
+  const runAiDelogo = useCallback(async () => {
+    const clip = selectedClip || viewClips[activeMainIndex(viewClips, starts, current)];
+    if (!clip?.assetId) {
+      pushToast("Select a video clip first", "info");
+      return;
+    }
+    try {
+      pushToast("Scanning for burned-in names…", "info");
+      const res = await fetch("/api/ai/delogo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          assetId: clip.assetId,
+          inPoint: clip.inPoint,
+          duration: clipSourceLength(clip),
+          samples: 5,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Watermark detect failed");
+      const boxes = Array.isArray(data.boxes) ? data.boxes : [];
+      if (!boxes.length) throw new Error(data.reason || "No marks found");
+      const effects = [...(clip.effects || [])];
+      const idx = effects.findIndex((e) => e.kind === "delogo");
+      const nextFx = {
+        id: idx >= 0 ? effects[idx].id : uid("fx-wm"),
+        kind: "delogo" as const,
+        enabled: true,
+        amount: Math.max(idx >= 0 ? effects[idx].amount : 0, 70),
+        boxes,
+        corner: undefined,
+      };
+      if (idx >= 0) effects[idx] = nextFx;
+      else effects.push(nextFx);
+      patchClip(clip.id, { effects });
+      pushToast(data.reason || `Covered ${boxes.length} mark(s)`, "success");
+      setTab("clip");
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Watermark detect failed", "error");
+    }
+  }, [selectedClip, viewClips, starts, current, projectId, patchClip, pushToast, setTab]);
+
   const runAiReframe = useCallback(async () => {
     const clip = selectedClip || viewClips[activeMainIndex(viewClips, starts, current)];
     if (!clip?.assetId) {
@@ -381,5 +424,6 @@ export function useStudioAi(args: StudioAiArgs) {
     applyAiMarkers,
     runAiSearch,
     runAiReframe,
+    runAiDelogo,
   };
 }

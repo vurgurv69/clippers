@@ -165,13 +165,31 @@ export type EffectKind =
   | "wave"
   | "tint"
   | "posterize"
-  | "negate";
+  | "negate"
+  | "delogo";
+
+/** Corner for watermark / logo removal (TikTok/IG-style covers). */
+export type DelogoCorner = "br" | "bl" | "tr" | "tl";
+
+/** Normalized watermark box (0–1, top-left origin) for AI / freeform delogo. */
+export type DelogoRegion = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Detected label, e.g. "flux", "@handle", "© Brand". */
+  label?: string;
+};
 
 export type ClipEffect = {
   id: string;
   kind: EffectKind;
   enabled: boolean;
   amount: number; // 0..100 generic strength
+  /** Watermark corner when kind === "delogo" and no freeform boxes. */
+  corner?: DelogoCorner;
+  /** Freeform / AI-detected regions (preferred over corner when present). */
+  boxes?: DelogoRegion[];
 };
 
 export const EFFECT_DEFS: {
@@ -181,6 +199,13 @@ export const EFFECT_DEFS: {
   hasAmount: boolean;
   defaultAmount: number;
 }[] = [
+  {
+    kind: "delogo",
+    label: "Remove watermark",
+    hint: "Cover logos and burned-in names (AI can find stable text marks)",
+    hasAmount: true,
+    defaultAmount: 45,
+  },
   { kind: "blur", label: "Blur", hint: "Soft gaussian blur", hasAmount: true, defaultAmount: 30 },
   { kind: "sharpen", label: "Sharpen", hint: "Crisp detail", hasAmount: true, defaultAmount: 40 },
   { kind: "grain", label: "Film Grain", hint: "Analog noise", hasAmount: true, defaultAmount: 25 },
@@ -203,7 +228,81 @@ export const EFFECT_DEFS: {
 
 export function defaultEffect(kind: EffectKind, id: string): ClipEffect {
   const def = EFFECT_DEFS.find((d) => d.kind === kind);
-  return { id, kind, enabled: true, amount: def?.defaultAmount ?? 50 };
+  return {
+    id,
+    kind,
+    enabled: true,
+    amount: def?.defaultAmount ?? 50,
+    ...(kind === "delogo" ? { corner: "br" as DelogoCorner } : {}),
+  };
+}
+
+/** Pixel box for ffmpeg delogo / preview cover. Amount scales size. */
+export function delogoBox(
+  frameW: number,
+  frameH: number,
+  corner: DelogoCorner = "br",
+  amount = 45,
+): { x: number; y: number; w: number; h: number } {
+  const a = Math.max(0, Math.min(100, amount)) / 100;
+  const bw = Math.max(16, Math.round(frameW * (0.14 + a * 0.2)));
+  const bh = Math.max(12, Math.round(frameH * (0.09 + a * 0.14)));
+  const pad = Math.max(2, Math.round(Math.min(frameW, frameH) * 0.012));
+  const xR = Math.max(0, frameW - bw - pad);
+  const yB = Math.max(0, frameH - bh - pad);
+  switch (corner) {
+    case "bl":
+      return { x: pad, y: yB, w: bw, h: bh };
+    case "tr":
+      return { x: xR, y: pad, w: bw, h: bh };
+    case "tl":
+      return { x: pad, y: pad, w: bw, h: bh };
+    case "br":
+    default:
+      return { x: xR, y: yB, w: bw, h: bh };
+  }
+}
+
+/** Convert normalized AI boxes (+ optional pad from amount) to ffmpeg pixel boxes. */
+export function delogoRegionsToPixels(
+  frameW: number,
+  frameH: number,
+  regions: DelogoRegion[],
+  amount = 45,
+): { x: number; y: number; w: number; h: number; label?: string }[] {
+  // Generous pad so thin text names (flux / ©) are fully covered.
+  const padFrac = 0.02 + (Math.max(0, Math.min(100, amount)) / 100) * 0.06;
+  return regions
+    .map((r) => {
+      const px = Math.max(0, Math.min(1, r.x)) * frameW;
+      const py = Math.max(0, Math.min(1, r.y)) * frameH;
+      const pw = Math.max(0.03, Math.min(1, r.w)) * frameW;
+      const ph = Math.max(0.02, Math.min(1, r.h)) * frameH;
+      const padX = Math.max(frameW * padFrac, 8);
+      const padY = Math.max(frameH * padFrac, 6);
+      let x = Math.floor(px - padX);
+      let y = Math.floor(py - padY);
+      let w = Math.ceil(pw + padX * 2);
+      let h = Math.ceil(ph + padY * 2);
+      x = Math.max(2, x);
+      y = Math.max(2, y);
+      w = Math.max(16, Math.min(w, frameW - x - 2));
+      h = Math.max(12, Math.min(h, frameH - y - 2));
+      return { x, y, w, h, label: r.label };
+    })
+    .filter((b) => b.w >= 16 && b.h >= 12);
+}
+
+/** Resolve all pixel covers for a delogo effect. */
+export function resolveDelogoPixels(
+  frameW: number,
+  frameH: number,
+  fx: Pick<ClipEffect, "corner" | "boxes" | "amount">,
+): { x: number; y: number; w: number; h: number; label?: string }[] {
+  if (fx.boxes?.length) {
+    return delogoRegionsToPixels(frameW, frameH, fx.boxes, fx.amount ?? 45);
+  }
+  return [delogoBox(frameW, frameH, fx.corner || "br", fx.amount ?? 45)];
 }
 
 /**
@@ -781,11 +880,16 @@ export const IMAGE_DEFAULT_DURATION = 4;
 
 export function defaultClip(asset: ProjectAsset, id: string): TimelineClip {
   const isImage = asset.kind === "image";
+  const dur = Number(asset.duration);
   return {
     id,
     assetId: asset.id,
     inPoint: 0,
-    outPoint: isImage ? IMAGE_DEFAULT_DURATION : asset.duration || IMAGE_DEFAULT_DURATION,
+    outPoint: isImage
+      ? IMAGE_DEFAULT_DURATION
+      : Number.isFinite(dur) && dur > 0
+        ? dur
+        : IMAGE_DEFAULT_DURATION,
     speed: 1,
     transition: "none",
     transitionDuration: 0.5,

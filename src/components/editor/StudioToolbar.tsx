@@ -8,26 +8,28 @@ type Props = {
   onSetTool: (t: ToolId) => void;
   selectedId: string | null;
   onDuplicate: () => void;
+  density?: "s" | "m" | "l";
 };
 
-const TOOLS: { id: ToolId; label: string; shortcut: string }[] = [
-  { id: "select", label: "Pointer", shortcut: "V" },
-  { id: "blade", label: "Blade", shortcut: "C" },
-  { id: "trim", label: "Trim", shortcut: "T" },
-  { id: "ripple", label: "Ripple", shortcut: "R" },
-  { id: "slip", label: "Slip", shortcut: "Y" },
-  { id: "slide", label: "Slide", shortcut: "U" },
-  { id: "roll", label: "Roll", shortcut: "N" },
-  { id: "hand", label: "Hand", shortcut: "H" },
-  { id: "zoom", label: "Zoom", shortcut: "Z" },
+const TOOLS: { id: ToolId; label: string; shortcut: string; glyph: string }[] = [
+  { id: "select", label: "Pointer", shortcut: "V", glyph: "▸" },
+  { id: "blade", label: "Blade", shortcut: "C", glyph: "✂" },
+  { id: "trim", label: "Trim", shortcut: "T", glyph: "⟷" },
+  { id: "ripple", label: "Ripple", shortcut: "R", glyph: "≋" },
+  { id: "slip", label: "Slip", shortcut: "Y", glyph: "⇄" },
+  { id: "slide", label: "Slide", shortcut: "U", glyph: "⇔" },
+  { id: "roll", label: "Roll", shortcut: "N", glyph: "⟳" },
+  { id: "hand", label: "Hand", shortcut: "H", glyph: "✋" },
+  { id: "zoom", label: "Zoom", shortcut: "Z", glyph: "⌕" },
 ];
 
-/** Slim edit strip: tool selector (left) · Duplicate (right). Split/Delete live on the timeline bar. */
+/** Studio 2.0 tool strip — larger hit targets, hover labels, density. */
 export function StudioToolbar({
   tool,
   onSetTool,
   selectedId,
   onDuplicate,
+  density = "m",
 }: Props) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -44,7 +46,31 @@ export function StudioToolbar({
   }, [open]);
 
   return (
-    <div className="studio-toolbar pro-toolbar" role="toolbar" aria-label="Editing tools" ref={wrapRef}>
+    <div
+      className={`studio-toolbar pro-toolbar cc-toolbar-v2 density-${density}`}
+      role="toolbar"
+      aria-label="Editing tools"
+      ref={wrapRef}
+    >
+      <div className="toolbar-group tool-rail" role="group" aria-label="Edit tools">
+        {TOOLS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={tool === t.id ? "tool-btn on" : "tool-btn"}
+            title={`${t.label} (${t.shortcut})`}
+            aria-label={`${t.label} (${t.shortcut})`}
+            aria-pressed={tool === t.id}
+            onClick={() => onSetTool(t.id)}
+          >
+            <span className="tool-glyph" aria-hidden>
+              {t.glyph}
+            </span>
+            <span className="tool-tip">{t.label}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="toolbar-group tool-selector-wrap">
         <button
           type="button"
@@ -55,6 +81,7 @@ export function StudioToolbar({
           onClick={() => setOpen((v) => !v)}
         >
           <span className="tool-selector-label">{active.label}</span>
+          <kbd>{active.shortcut}</kbd>
           <span className="tool-selector-caret" aria-hidden>
             ▾
           </span>
@@ -71,7 +98,9 @@ export function StudioToolbar({
                     setOpen(false);
                   }}
                 >
-                  <span>{t.label}</span>
+                  <span>
+                    {t.glyph} {t.label}
+                  </span>
                   <kbd>{t.shortcut}</kbd>
                 </button>
               </li>

@@ -29,6 +29,7 @@ export type StudioCommandActions = {
   setSidebarTab: Dispatch<SetStateAction<SidebarTab>>;
   runAiAnalyze: () => void | Promise<void>;
   runAiReframe: () => void | Promise<void>;
+  runAiDelogo: () => void | Promise<void>;
   suggestAndInsertBroll: () => void | Promise<void>;
   createShareLink: () => void | Promise<void>;
   exportThumbnail: (headline?: string) => void | Promise<void>;
@@ -72,6 +73,9 @@ export function useStudioCommands(actions: StudioCommandActions): CommandItem[] 
         { id: "ws-edit", label: "Workspace: Editing", hint: "layout", run: () => a.applyWorkspace("editing") },
         { id: "ws-color", label: "Workspace: Color", hint: "layout", run: () => a.applyWorkspace("color") },
         { id: "ws-audio", label: "Workspace: Audio", hint: "layout", run: () => a.applyWorkspace("audio") },
+        { id: "ws-captions", label: "Workspace: Captions", hint: "layout", run: () => a.applyWorkspace("captions") },
+        { id: "ws-compact", label: "Workspace: Compact", hint: "layout", run: () => a.applyWorkspace("compact") },
+        { id: "ws-wide", label: "Workspace: Wide", hint: "layout", run: () => a.applyWorkspace("wide") },
         { id: "ws-deliver", label: "Workspace: Deliver", hint: "layout", run: () => a.applyWorkspace("deliver") },
         {
           id: "growth-hub",
@@ -99,6 +103,12 @@ export function useStudioCommands(actions: StudioCommandActions): CommandItem[] 
           label: "AI: Reframe to face",
           hint: "AI",
           run: () => void a.runAiReframe(),
+        },
+        {
+          id: "ai-delogo",
+          label: "AI: Remove burned-in names",
+          hint: "AI",
+          run: () => void a.runAiDelogo(),
         },
         {
           id: "ai-broll-suggest",

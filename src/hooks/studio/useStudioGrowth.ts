@@ -89,6 +89,7 @@ export type StudioGrowthArgs = {
   refreshExportJobs: () => Promise<void>;
   runAiAnalyze: () => void | Promise<void>;
   runAiReframe: () => void | Promise<void>;
+  runAiDelogo?: () => void | Promise<void>;
   pushToast: ToastFn;
 };
 
@@ -143,6 +144,7 @@ export function useStudioGrowth(args: StudioGrowthArgs) {
     refreshExportJobs,
     runAiAnalyze,
     runAiReframe,
+    runAiDelogo,
     pushToast,
   } = args;
 
@@ -669,7 +671,8 @@ export function useStudioGrowth(args: StudioGrowthArgs) {
           setTab("audio");
           break;
         case "cleanup":
-          setSidebarTab("cleanup");
+          setSidebarTab("media");
+          setTab("extra");
           break;
         case "transcript":
           setSidebarTab("ai");

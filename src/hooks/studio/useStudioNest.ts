@@ -11,6 +11,7 @@ import {
   type TimelineClip,
 } from "@/lib/editor-types";
 import { uid } from "@/lib/studio-clip-ops";
+import { playbackClock } from "@/hooks/studio/playbackClock";
 
 type ToastFn = (msg: string, kind?: "info" | "success" | "error") => void;
 
@@ -153,6 +154,7 @@ export function useStudioNest(args: StudioNestArgs) {
       setSelectedIds(first ? [first.id] : []);
       setCurrent(0);
       curRef.current = 0;
+      playbackClock.set(0);
       setPlaying(false);
       musicRef.current?.pause();
       sfxRefs.current.forEach((a) => a?.pause());
@@ -180,6 +182,7 @@ export function useStudioNest(args: StudioNestArgs) {
     setSelectedIds([parentId]);
     setCurrent(0);
     curRef.current = 0;
+    playbackClock.set(0);
     setPlaying(false);
   }, [curRef, nestPath, setCurrent, setNestPath, setPlaying, setSelectedId, setSelectedIds]);
 

@@ -18,12 +18,20 @@ import {
   TRANSITION_DEFS,
   clipLane,
   clipLength,
+  type DelogoCorner,
   type EffectKind,
   type KeyframeEase,
   type KeyframeProp,
   type ProjectAsset,
   type TransitionKind,
 } from "@/lib/editor-types";
+
+const DELOGO_CORNERS: { id: DelogoCorner; label: string }[] = [
+  { id: "tl", label: "TL" },
+  { id: "tr", label: "TR" },
+  { id: "bl", label: "BL" },
+  { id: "br", label: "BR" },
+];
 import { InspSection, PanelBlock, inspMatch } from "@/components/editor/InspSection";
 import { AudioMixerStrip } from "@/components/editor/AudioMixerStrip";
 import { KeyframeGraph } from "@/components/editor/KeyframeGraph";
@@ -136,9 +144,48 @@ export function FxPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                     </button>
                   </div>
                 </div>
+                {fx.kind === "delogo" && (
+                  <>
+                    {fx.boxes?.length ? (
+                      <p className="tool-hint">
+                        AI boxes:{" "}
+                        {fx.boxes
+                          .map((b) => b.label || "mark")
+                          .slice(0, 4)
+                          .join(" · ")}
+                      </p>
+                    ) : null}
+                    <div className="chip-row delogo-corners">
+                      {DELOGO_CORNERS.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className={
+                            !fx.boxes?.length && (fx.corner || "br") === c.id
+                              ? "chip on"
+                              : "chip"
+                          }
+                          onClick={() =>
+                            updateEffect(selectedClip.id, fx.id, {
+                              corner: c.id,
+                              boxes: undefined,
+                            })
+                          }
+                          title={`${c.label} corner`}
+                        >
+                          <span>{c.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
                 {def?.hasAmount && (
                   <Slider
-                    label={`Amount · ${Math.round(fx.amount)}`}
+                    label={
+                      fx.kind === "delogo"
+                        ? `Cover size · ${Math.round(fx.amount)}`
+                        : `Amount · ${Math.round(fx.amount)}`
+                    }
                     min={0}
                     max={100}
                     value={fx.amount}

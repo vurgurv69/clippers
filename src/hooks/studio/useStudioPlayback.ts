@@ -11,8 +11,10 @@ import {
   type TrackChrome,
   type TrackId,
 } from "@/lib/editor-types";
+import { playbackClock } from "@/hooks/studio/playbackClock";
 
 const FPS = 30;
+let lastUiPushMs = 0;
 
 type ToastFn = (msg: string, kind?: "info" | "success" | "error") => void;
 
@@ -225,6 +227,7 @@ export function useStudioPlayback(args: StudioPlaybackArgs) {
           }
         } else {
           curRef.current = total;
+          playbackClock.set(total);
           setCurrent(total);
           syncMusic(total, false);
           syncSfx(total, false);
@@ -234,6 +237,7 @@ export function useStudioPlayback(args: StudioPlaybackArgs) {
       }
       if (dir === -1 && next <= 0) {
         curRef.current = 0;
+        playbackClock.set(0);
         setCurrent(0);
         syncMusic(0, false);
         syncSfx(0, false);
@@ -243,7 +247,14 @@ export function useStudioPlayback(args: StudioPlaybackArgs) {
       }
 
       curRef.current = next;
-      setCurrent(next);
+      playbackClock.set(next);
+      // Studio 2.0: throttle React state to ~12fps so the shell doesn't re-render every frame.
+      // Video/audio stay locked to curRef every rAF.
+      const uiNow = performance.now();
+      if (uiNow - lastUiPushMs >= 80) {
+        lastUiPushMs = uiNow;
+        setCurrent(next);
+      }
       if (clip && videoRef.current && assetById.get(clip.assetId)?.kind === "video") {
         const len = clipLength(clip);
         const u = len > 0 ? clamp((next - (starts[idx] || 0)) / len, 0, 1) : 0;
@@ -285,6 +296,8 @@ export function useStudioPlayback(args: StudioPlaybackArgs) {
     (t: number) => {
       const clamped = clamp(t, 0, scrubTotal);
       curRef.current = clamped;
+      playbackClock.set(clamped);
+      lastUiPushMs = 0;
       setCurrent(clamped);
       const v = videoRef.current;
       if (v && activeAsset?.kind === "video") {
@@ -320,6 +333,7 @@ export function useStudioPlayback(args: StudioPlaybackArgs) {
     setDir(1);
     if (curRef.current >= total - 0.02) {
       curRef.current = 0;
+      playbackClock.set(0);
       setCurrent(0);
     }
     const next = !playing;
@@ -360,6 +374,7 @@ export function useStudioPlayback(args: StudioPlaybackArgs) {
       setRate(1);
       if (curRef.current >= total - 0.02) {
         curRef.current = 0;
+        playbackClock.set(0);
         setCurrent(0);
       }
       setPlaying(true);

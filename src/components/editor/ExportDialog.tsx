@@ -15,6 +15,7 @@ import {
 } from "@/lib/editor-types";
 
 const FAV_EXPORT_KEY = "clippers.fav.exportPresets";
+const LAST_EXPORT_KEY = "clippers.last.exportOptions";
 
 type NamedPreset = { id: string; label: string; options: ExportOptions };
 
@@ -74,6 +75,29 @@ export function ExportDialog({
   const [hwLabel, setHwLabel] = useState("Detecting…");
   const [hwAvailable, setHwAvailable] = useState(false);
   const [favs, setFavs] = useState<NamedPreset[]>(() => loadFavs());
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(LAST_EXPORT_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as ExportOptions;
+      if (saved && typeof saved === "object" && saved.format) {
+        setOptions({ ...DEFAULT_EXPORT, ...saved });
+      }
+    } catch {
+      /* ignore */
+    }
+    // Restore once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAST_EXPORT_KEY, JSON.stringify(options));
+    } catch {
+      /* ignore */
+    }
+  }, [options]);
 
   const codec: ExportCodec =
     options.format === "gif"
@@ -186,7 +210,7 @@ export function ExportDialog({
 
   return (
     <div className="export-overlay" role="dialog" aria-modal="true" aria-label="Export settings">
-      <div className="export-dialog">
+      <div className="export-dialog export-dialog-v2">
         <header className="export-head">
           <h3>Export video</h3>
           <button className="btn ghost" onClick={onCancel}>
@@ -194,181 +218,186 @@ export function ExportDialog({
           </button>
         </header>
 
-        <div className="export-body">
-          <div className="export-group">
-            <span className="export-label">Presets</span>
-            <div className="seg wrap">
-              {allPresets.map((p) => (
-                <button
-                  key={p.id}
-                  className="seg-btn"
-                  onClick={() => setOptions({ ...options, ...p.options })}
-                  title={p.label}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button className="seg-btn" onClick={saveFavorite} title="Save current as favorite">
-                ★ Save
-              </button>
-            </div>
-          </div>
-
-          <div className="export-group">
-            <span className="export-label">Format</span>
-            <div className="seg">
-              {EXPORT_FORMATS.map((f) => (
-                <button
-                  key={f.id}
-                  className={options.format === f.id ? "seg-btn on" : "seg-btn"}
-                  onClick={() => setFormat(f.id)}
-                  title={f.hint}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {options.format !== "gif" && codecsForFormat.length > 1 && (
+        <div className="export-body export-body-v2">
+          <div className="export-col export-col-settings">
             <div className="export-group">
-              <span className="export-label">Codec</span>
-              <div className="seg">
-                {codecsForFormat.map((c) => (
+              <span className="export-label">Presets</span>
+              <div className="seg wrap">
+                {allPresets.map((p) => (
                   <button
-                    key={c.id}
-                    className={codec === c.id ? "seg-btn on" : "seg-btn"}
-                    onClick={() => setOptions({ ...options, codec: c.id })}
+                    key={p.id}
+                    className="seg-btn"
+                    onClick={() => setOptions({ ...options, ...p.options })}
+                    title={p.label}
                   >
-                    {c.label}
+                    {p.label}
+                  </button>
+                ))}
+                <button className="seg-btn" onClick={saveFavorite} title="Save current as favorite">
+                  ★ Save
+                </button>
+              </div>
+            </div>
+
+            <div className="export-group">
+              <span className="export-label">Format</span>
+              <div className="seg">
+                {EXPORT_FORMATS.map((f) => (
+                  <button
+                    key={f.id}
+                    className={options.format === f.id ? "seg-btn on" : "seg-btn"}
+                    onClick={() => setFormat(f.id)}
+                    title={f.hint}
+                  >
+                    {f.label}
                   </button>
                 ))}
               </div>
             </div>
-          )}
 
-          <div className="export-group">
-            <span className="export-label">Resolution</span>
-            <div className="seg">
-              {EXPORT_RESOLUTIONS.map((r) => (
-                <button
-                  key={r.id}
-                  className={options.resolution === r.id ? "seg-btn on" : "seg-btn"}
-                  onClick={() => setOptions({ ...options, resolution: r.id })}
-                >
-                  {r.label}
-                </button>
-              ))}
+            {options.format !== "gif" && codecsForFormat.length > 1 && (
+              <div className="export-group">
+                <span className="export-label">Codec</span>
+                <div className="seg">
+                  {codecsForFormat.map((c) => (
+                    <button
+                      key={c.id}
+                      className={codec === c.id ? "seg-btn on" : "seg-btn"}
+                      onClick={() => setOptions({ ...options, codec: c.id })}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="export-group">
+              <span className="export-label">Resolution</span>
+              <div className="seg">
+                {EXPORT_RESOLUTIONS.map((r) => (
+                  <button
+                    key={r.id}
+                    className={options.resolution === r.id ? "seg-btn on" : "seg-btn"}
+                    onClick={() => setOptions({ ...options, resolution: r.id })}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="export-group">
-            <span className="export-label">Frame rate</span>
-            <div className="seg">
-              {EXPORT_FPS.map((f) => (
-                <button
-                  key={f}
-                  className={options.fps === f ? "seg-btn on" : "seg-btn"}
-                  onClick={() => setOptions({ ...options, fps: f })}
-                  disabled={options.format === "gif" && f > 30}
-                >
-                  {f}
-                </button>
-              ))}
+            <div className="export-group">
+              <span className="export-label">Frame rate</span>
+              <div className="seg">
+                {EXPORT_FPS.map((f) => (
+                  <button
+                    key={f}
+                    className={options.fps === f ? "seg-btn on" : "seg-btn"}
+                    onClick={() => setOptions({ ...options, fps: f })}
+                    disabled={options.format === "gif" && f > 30}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="export-group">
-            <span className="export-label">Quality</span>
-            <div className="seg">
-              {EXPORT_QUALITIES.map((q) => (
-                <button
-                  key={q.id}
-                  className={options.quality === q.id ? "seg-btn on" : "seg-btn"}
-                  onClick={() => setOptions({ ...options, quality: q.id })}
-                  disabled={options.format === "gif"}
-                >
-                  {q.label}
-                </button>
-              ))}
+            <div className="export-group">
+              <span className="export-label">Quality</span>
+              <div className="seg">
+                {EXPORT_QUALITIES.map((q) => (
+                  <button
+                    key={q.id}
+                    className={options.quality === q.id ? "seg-btn on" : "seg-btn"}
+                    onClick={() => setOptions({ ...options, quality: q.id })}
+                    disabled={options.format === "gif"}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          {hwEligible && (
+            {hwEligible && (
+              <label className="export-group seg-row">
+                <span className="export-label">
+                  Hardware encode {hwAvailable ? `(${hwLabel})` : "(not available)"}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={options.hwEncode !== false && hwAvailable}
+                  disabled={!hwAvailable}
+                  onChange={(e) => setOptions({ ...options, hwEncode: e.target.checked })}
+                />
+              </label>
+            )}
+
             <label className="export-group seg-row">
-              <span className="export-label">
-                Hardware encode {hwAvailable ? `(${hwLabel})` : "(not available)"}
-              </span>
+              <span className="export-label">Karaoke captions (Whisper words)</span>
               <input
                 type="checkbox"
-                checked={options.hwEncode !== false && hwAvailable}
-                disabled={!hwAvailable}
-                onChange={(e) => setOptions({ ...options, hwEncode: e.target.checked })}
+                checked={Boolean(options.karaokeCaptions)}
+                onChange={(e) =>
+                  setOptions({ ...options, karaokeCaptions: e.target.checked })
+                }
               />
             </label>
-          )}
-
-          <label className="export-group seg-row">
-            <span className="export-label">
-              Karaoke captions (Whisper words)
-            </span>
-            <input
-              type="checkbox"
-              checked={Boolean(options.karaokeCaptions)}
-              onChange={(e) =>
-                setOptions({ ...options, karaokeCaptions: e.target.checked })
-              }
-            />
-          </label>
-          {options.karaokeCaptions && (
-            <p className="tool-hint">
-              Burns word-level captions from a cached transcript. Transcribe in the Script
-              tab first.
-            </p>
-          )}
-
-          <div className="export-estimate">
-            <div>
-              <span className="est-k">Output</span>
-              <span className="est-v">
-                {options.format === "gif" ? "640" : outW}×
-                {options.format === "gif" ? Math.round((outH / outW) * 640) : outH} ·{" "}
-                {options.format.toUpperCase()}
-                {options.format !== "gif" ? ` · ${codec.toUpperCase()}` : ""}
-              </span>
-            </div>
-            <div>
-              <span className="est-k">Duration</span>
-              <span className="est-v">{duration.toFixed(1)}s</span>
-            </div>
-            <div>
-              <span className="est-k">Est. size</span>
-              <span className="est-v">
-                {sizeMB >= 1 ? `${sizeMB.toFixed(0)} MB` : `${(sizeMB * 1024).toFixed(0)} KB`}
-              </span>
-            </div>
-            <div>
-              <span className="est-k">Est. time</span>
-              <span className="est-v">~{etaLabel}</span>
-            </div>
-            <div>
-              <span className="est-k">Encoder</span>
-              <span className="est-v">{encoderHint()}</span>
-            </div>
-            <div>
-              <span className="est-k">Frames</span>
-              <span className="est-v">{Math.round(duration * options.fps).toLocaleString()}</span>
-            </div>
+            {options.karaokeCaptions && (
+              <p className="tool-hint">
+                Burns word-level captions from a cached transcript. Transcribe in the Script
+                tab first.
+              </p>
+            )}
           </div>
-          {options.format === "gif" && (
-            <p className="tool-hint">GIF has no audio and is capped at 640px / 20fps.</p>
-          )}
-          {codec === "av1" && (
-            <p className="tool-hint">AV1 is slower to encode but much smaller files.</p>
-          )}
-          {options.resolution >= 4320 && (
-            <p className="tool-hint">8K exports need a lot of RAM and time.</p>
-          )}
+
+          <aside className="export-col export-col-summary">
+            <h4 className="export-summary-title">Render summary</h4>
+            <div className="export-estimate">
+              <div>
+                <span className="est-k">Output</span>
+                <span className="est-v">
+                  {options.format === "gif" ? "640" : outW}×
+                  {options.format === "gif" ? Math.round((outH / outW) * 640) : outH} ·{" "}
+                  {options.format.toUpperCase()}
+                  {options.format !== "gif" ? ` · ${codec.toUpperCase()}` : ""}
+                </span>
+              </div>
+              <div>
+                <span className="est-k">Duration</span>
+                <span className="est-v">{duration.toFixed(1)}s</span>
+              </div>
+              <div>
+                <span className="est-k">Est. size</span>
+                <span className="est-v">
+                  {sizeMB >= 1 ? `${sizeMB.toFixed(0)} MB` : `${(sizeMB * 1024).toFixed(0)} KB`}
+                </span>
+              </div>
+              <div>
+                <span className="est-k">Est. time</span>
+                <span className="est-v">~{etaLabel}</span>
+              </div>
+              <div>
+                <span className="est-k">Encoder</span>
+                <span className="est-v">{encoderHint()}</span>
+              </div>
+              <div>
+                <span className="est-k">Frames</span>
+                <span className="est-v">
+                  {Math.round(duration * options.fps).toLocaleString()}
+                </span>
+              </div>
+            </div>
+            {options.format === "gif" && (
+              <p className="tool-hint">GIF has no audio and is capped at 640px / 20fps.</p>
+            )}
+            {codec === "av1" && (
+              <p className="tool-hint">AV1 is slower to encode but much smaller files.</p>
+            )}
+            {options.resolution >= 4320 && (
+              <p className="tool-hint">8K exports need a lot of RAM and time.</p>
+            )}
+          </aside>
         </div>
 
         <footer className="export-foot">

@@ -16,17 +16,15 @@ export type LibraryCategory = { id: string; label: string };
 
 /** Vertical rail tabs (one panel open at a time). */
 export const LIBRARY_TABS = [
-  { id: "media", label: "Media", icon: "▣" },
-  { id: "ai", label: "AI & Cap", icon: "✦" },
-  { id: "templates", label: "Templates", icon: "▦" },
-  { id: "transitions", label: "Trans", icon: "⇄" },
-  { id: "effects", label: "Effects", icon: "◈" },
-  { id: "animations", label: "Anim", icon: "↻" },
-  { id: "filters", label: "Filters", icon: "◎" },
-  { id: "broll", label: "Cutaway", icon: "⧉" },
-  { id: "cleanup", label: "Cleanup", icon: "✂" },
-  { id: "motion", label: "CTA", icon: "▶" },
-  { id: "publish", label: "Publish", icon: "⇪" },
+  { id: "media", label: "Media", icon: "film" },
+  { id: "ai", label: "AI Cap", icon: "spark" },
+  { id: "templates", label: "Templates", icon: "layout" },
+  { id: "transitions", label: "Trans", icon: "swap" },
+  { id: "effects", label: "Effects", icon: "sparkle" },
+  { id: "animations", label: "Anim", icon: "spin" },
+  { id: "filters", label: "Filters", icon: "drop" },
+  { id: "broll", label: "Overlay", icon: "layers" },
+  { id: "publish", label: "Publish", icon: "send" },
 ] as const;
 
 /**
@@ -470,6 +468,7 @@ const FX_CAT: Partial<Record<EffectKind, string>> = {
   grain: "film",
   vignette: "film",
   sharpen: "film",
+  delogo: "film",
 };
 
 export type EffectCard = {
@@ -500,6 +499,7 @@ function effectSwatch(kind: EffectKind): string {
     vignette: "radial-gradient(circle,#334155,#000)",
     pixelate: "repeating-conic-gradient(#334155 0% 25%,#1e293b 0% 50%) 0 0/16px 16px",
     shadow: "linear-gradient(135deg,#0f172a,#475569)",
+    delogo: "linear-gradient(135deg,#0f172a 60%,#64748b 61%,#0f172a 80%)",
   };
   return map[kind] || "linear-gradient(135deg,#1e293b,#2dd4a8)";
 }

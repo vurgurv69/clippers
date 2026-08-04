@@ -18,6 +18,7 @@ import {
   TRANSITION_DEFS,
   clipLane,
   clipLength,
+  type DelogoCorner,
   type EffectKind,
   type KeyframeEase,
   type KeyframeProp,
@@ -28,6 +29,13 @@ import { InspSection, PanelBlock, inspMatch } from "@/components/editor/InspSect
 import { AudioMixerStrip } from "@/components/editor/AudioMixerStrip";
 import { KeyframeGraph } from "@/components/editor/KeyframeGraph";
 import { panelCtx, type InspectorPanelCtx } from "@/components/editor/inspector/inspectorCtx";
+
+const DELOGO_CORNERS: { id: DelogoCorner; label: string; hint: string }[] = [
+  { id: "tl", label: "Top left", hint: "TL" },
+  { id: "tr", label: "Top right", hint: "TR" },
+  { id: "bl", label: "Bottom left", hint: "BL" },
+  { id: "br", label: "Bottom right", hint: "BR" },
+];
 
 const TRANSITION_UI = new Set<string>(TRANSITION_UI_IDS);
 const TRANSITIONS = TRANSITION_DEFS.filter(
@@ -44,31 +52,12 @@ export function InspectorClipActions({ ctx }: { ctx: InspectorPanelCtx }) {
     deleteClip,
   } = panelCtx(ctx);
   if (!selectedClip || tab === "text" || tab === "transitions") return null;
+  void moveClip;
+  void moveClipToLane;
   return (
-    <div className="inspector-actions">
-      <button className="btn tiny" onClick={() => moveClip(selectedClip.id, -1)}>
-        Move left
-      </button>
-      <button className="btn tiny" onClick={() => moveClip(selectedClip.id, 1)}>
-        Move right
-      </button>
+    <div className="inspector-actions insp-actions-clean">
       <button className="btn tiny" onClick={() => duplicateClip(selectedClip.id)}>
         Duplicate
-      </button>
-      <button
-        className="btn tiny"
-        onClick={() => {
-          const lane = clipLane(selectedClip);
-          const next = lane === 0 ? 1 : lane === 1 ? 2 : 0;
-          moveClipToLane(selectedClip.id, next);
-        }}
-        title="Cycle track lane V1 → V2 → V3 → V1"
-      >
-        {clipLane(selectedClip) === 0
-          ? "To V2"
-          : clipLane(selectedClip) === 1
-            ? "To V3"
-            : "To V1"}
       </button>
       <button className="btn tiny danger" onClick={() => deleteClip(selectedClip.id)}>
         Delete
@@ -304,7 +293,159 @@ function ClipLayersSection({ ctx }: { ctx: InspectorPanelCtx }) {
   );
 }
 
-/** Clip tab — layers only. */
+function WatermarkRemover({ ctx }: { ctx: InspectorPanelCtx }) {
+  const {
+    selectedClip,
+    projectId,
+    addEffect,
+    updateEffect,
+    removeEffect,
+    setEffects,
+    pushToast,
+  } = panelCtx(ctx);
+  const [busy, setBusy] = useState(false);
+  if (!selectedClip) return null;
+  const fx = (selectedClip.effects || []).find((e) => e.kind === "delogo");
+  const labels = (fx?.boxes || []).map((b) => b.label).filter(Boolean) as string[];
+
+  const applyBoxes = (
+    boxes: { x: number; y: number; w: number; h: number; label?: string }[],
+  ) => {
+    const existing = (selectedClip.effects || []).find((e) => e.kind === "delogo");
+    if (existing) {
+      updateEffect(selectedClip.id, existing.id, {
+        enabled: true,
+        boxes,
+        corner: undefined,
+        amount: Math.max(existing.amount || 0, 70),
+      });
+      return;
+    }
+    if (setEffects) {
+      const next = [
+        ...(selectedClip.effects || []),
+        {
+          id: `fx-wm-${Date.now().toString(36)}`,
+          kind: "delogo" as const,
+          enabled: true,
+          amount: 70,
+          boxes,
+        },
+      ];
+      setEffects(selectedClip.id, next);
+      return;
+    }
+    addEffect(selectedClip.id, "delogo");
+  };
+
+  const runAiDetect = async () => {
+    if (busy) return;
+    setBusy(true);
+    pushToast("Scanning clip for burned-in names…", "info");
+    try {
+      const res = await fetch("/api/ai/delogo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          assetId: selectedClip.assetId,
+          inPoint: selectedClip.inPoint,
+          duration: Math.max(0.8, selectedClip.outPoint - selectedClip.inPoint),
+          samples: 5,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Detect failed");
+      const boxes = Array.isArray(data.boxes) ? data.boxes : [];
+      if (!boxes.length) throw new Error(data.reason || "No marks found");
+      applyBoxes(boxes);
+      pushToast(data.reason || `Covered ${boxes.length} mark(s)`, "success");
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : "Detect failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <PanelBlock
+      title="Remove watermark"
+      hint="AI finds stable burned-in names (flux, ©, handles) across frames — or pick a corner manually."
+      filterMatch={inspMatch(
+        ctx.inspSearch || "",
+        "watermark",
+        "logo",
+        "delogo",
+        "tiktok",
+        "instagram",
+        "flux",
+        "name",
+        "copyright",
+      )}
+    >
+      <button
+        type="button"
+        className="btn tiny wide insp-reset-btn"
+        disabled={busy}
+        onClick={() => void runAiDetect()}
+      >
+        {busy ? "Scanning…" : "AI remove names / logos"}
+      </button>
+      {labels.length > 0 && (
+        <p className="tool-hint">Covering: {labels.slice(0, 5).join(" · ")}</p>
+      )}
+      {!fx ? (
+        <button
+          type="button"
+          className="btn tiny wide"
+          onClick={() => addEffect(selectedClip.id, "delogo")}
+        >
+          Or cover a corner
+        </button>
+      ) : (
+        <>
+          <div className="chip-row delogo-corners">
+            {DELOGO_CORNERS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={
+                  !fx.boxes?.length && (fx.corner || "br") === c.id ? "chip on" : "chip"
+                }
+                title={c.label}
+                onClick={() =>
+                  updateEffect(selectedClip.id, fx.id, {
+                    corner: c.id,
+                    boxes: undefined,
+                    enabled: true,
+                  })
+                }
+              >
+                <span>{c.hint}</span>
+              </button>
+            ))}
+          </div>
+          <Slider
+            label={`Cover pad · ${Math.round(fx.amount)}`}
+            min={10}
+            max={100}
+            value={fx.amount}
+            onChange={(v) => updateEffect(selectedClip.id, fx.id, { amount: v })}
+          />
+          <button
+            type="button"
+            className="btn tiny wide"
+            onClick={() => removeEffect(selectedClip.id, fx.id)}
+          >
+            Clear watermark cover
+          </button>
+        </>
+      )}
+    </PanelBlock>
+  );
+}
+
+/** Clip tab — layers + watermark remover. */
 export function ClipPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   const { selectedClip, selectedText, patchText } = panelCtx(ctx);
   if (selectedText && !selectedClip) {
@@ -339,6 +480,7 @@ export function ClipPanel({ ctx }: { ctx: InspectorPanelCtx }) {
   }
   return (
     <div className="tool">
+      <WatermarkRemover ctx={ctx} />
       <ClipLayersSection ctx={ctx} />
     </div>
   );

@@ -188,6 +188,26 @@ export function useStudioEffects(args: StudioEffectsArgs) {
     (id: string, kind: EffectKind) => {
       const clip = viewClips.find((c) => c.id === id);
       if (!clip) return;
+      // One watermark cover per clip — re-enable instead of stacking.
+      if (kind === "delogo") {
+        const existing = (clip.effects || []).find((f) => f.kind === "delogo");
+        if (existing) {
+          setEffects(
+            id,
+            (clip.effects || []).map((f) =>
+              f.id === existing.id
+                ? {
+                    ...f,
+                    enabled: true,
+                    corner: f.boxes?.length ? f.corner : f.corner || "br",
+                  }
+                : f,
+            ),
+          );
+          pushToast("Watermark cover updated", "success");
+          return;
+        }
+      }
       const list = [...(clip.effects || []), defaultEffect(kind, uid("fx"))];
       setEffects(id, list);
       pushToast(`${EFFECT_DEFS.find((d) => d.kind === kind)?.label || "Effect"} added`, "success");

@@ -12,6 +12,7 @@ import {
 import { TRANSITION_UI_IDS } from "@/lib/capcut-catalog";
 import {
   COLOR_PRESETS,
+  DEFAULT_COLOR,
   DEFAULT_TRANSFORM,
   EFFECT_DEFS,
   KEYFRAME_EASES,
@@ -153,7 +154,28 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
         hint="Everyday picture fixes. Presets apply a full look; sliders fine-tune."
         filterMatch={inspMatch(ctx.inspSearch || "", "color", "brightness", "contrast", "saturation", "vignette", "sharpen", "look", "preset")}
       >
-      <p className="tool-label">Presets</p>
+      <div className="color-wheels-head">
+        <p className="tool-label" style={{ margin: 0 }}>
+          Presets
+        </p>
+        <button
+          type="button"
+          className="btn tiny insp-reset-btn"
+          title="Reset look sliders"
+          onClick={() =>
+            patchColor(selectedClip.id, {
+              brightness: DEFAULT_COLOR.brightness,
+              contrast: DEFAULT_COLOR.contrast,
+              saturation: DEFAULT_COLOR.saturation,
+              sharpen: DEFAULT_COLOR.sharpen,
+              vignette: DEFAULT_COLOR.vignette,
+              preset: "none",
+            })
+          }
+        >
+          Reset
+        </button>
+      </div>
       <div className="preset-grid compact">
         {COLOR_PRESETS.map((p) => (
           <button
@@ -230,21 +252,24 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
       </InspSection>
 
       <PanelBlock
-        title="Lift / Gamma / Gain"
-        hint="Drag anywhere on a wheel — up/down and left/right. Double-click to reset."
-        filterMatch={inspMatch(ctx.inspSearch || "", "lift", "gamma", "gain", "wheels")}
+        title="Lift · Gain · Gamma"
+        hint="Shadows · midtones · highlights. Double-click a wheel to zero it."
+        filterMatch={inspMatch(ctx.inspSearch || "", "lift", "gain", "gamma", "wheels")}
       >
         <ColorWheelsRow
           lift={selectedClip.color.lift ?? 0}
           gamma={selectedClip.color.gamma ?? 0}
           gain={selectedClip.color.gain ?? 0}
           onChange={(p) => patchColor(selectedClip.id, { ...p, preset: "custom" })}
+          onReset={() =>
+            patchColor(selectedClip.id, { lift: 0, gain: 0, gamma: 0, preset: "custom" })
+          }
         />
       </PanelBlock>
 
       <PanelBlock
         title="Color wheel"
-        hint="Pick a tint. Recent colors are saved on this device."
+        hint="Pick a tint. Reset clears hue/saturation from this wheel."
         filterMatch={inspMatch(ctx.inspSearch || "", "wheel", "hex", "recent", "tint", "hue")}
       >
         <HueColorWheel
@@ -254,6 +279,15 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
             const r = parseInt(m[1], 16) / 255;
             const g = parseInt(m[2], 16) / 255;
             const b = parseInt(m[3], 16) / 255;
+            // White / near-white = clear tint from this wheel
+            if (r > 0.96 && g > 0.96 && b > 0.96) {
+              patchColor(selectedClip.id, {
+                hueShift: 0,
+                saturation: DEFAULT_COLOR.saturation,
+                preset: "custom",
+              });
+              return;
+            }
             const max = Math.max(r, g, b);
             const min = Math.min(r, g, b);
             const d = max - min;
@@ -383,18 +417,20 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
           <span>◆ Brightness KF</span>
         </button>
       </div>
-      <div className="chip-row">
+      <div className="insp-grade-actions">
         <button
-          className="chip"
+          type="button"
+          className="btn tiny"
           onClick={() => {
             gradeClipboardRef.current = { ...selectedClip.color };
             pushToast("Grading copied", "success");
           }}
         >
-          <span>Copy grade</span>
+          Copy grade
         </button>
         <button
-          className="chip"
+          type="button"
+          className="btn tiny"
           onClick={() => {
             if (!gradeClipboardRef.current) {
               pushToast("No grading on clipboard", "info");
@@ -408,30 +444,27 @@ export function EffectsPanel({ ctx }: { ctx: InspectorPanelCtx }) {
             pushToast(`Grade pasted to ${targets.length} clip(s)`, "success");
           }}
         >
-          <span>Paste grade</span>
+          Paste grade
+        </button>
+        <button
+          type="button"
+          className="btn tiny insp-reset-btn insp-grade-reset"
+          onClick={() =>
+            patchColor(selectedClip.id, {
+              ...DEFAULT_COLOR,
+              lift: 0,
+              gamma: 0,
+              gain: 0,
+              hueShift: 0,
+              lightness: 0,
+              lut: undefined,
+              preset: "none",
+            })
+          }
+        >
+          Reset all color
         </button>
       </div>
-      <button
-        className="btn tiny wide"
-        onClick={() =>
-          patchColor(selectedClip.id, {
-            temperature: 0,
-            tint: 0,
-            exposure: 0,
-            highlights: 0,
-            shadows: 0,
-            whites: 0,
-            blacks: 0,
-            curve: 0,
-            hueShift: 0,
-            lightness: 0,
-            lut: undefined,
-            preset: "custom",
-          })
-        }
-      >
-        Reset grading
-      </button>
     </div>
   );
 }

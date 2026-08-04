@@ -908,6 +908,29 @@ export function GrowthHub({
         </nav>
 
         <div className="cc-growth-body" role="tabpanel">
+          <div className="cc-growth-dash" aria-label="Growth Hub shortcuts">
+            {(
+              [
+                ["score", "Score", "Viral scorecard"],
+                ["copy", "Copy", "Titles & captions"],
+                ["thumbs", "Thumbs", "Thumbnail layouts"],
+                ["publish", "Publish", "Schedule & post"],
+                ["analytics", "Analytics", "Reach snapshot"],
+                ["cloud", "Cloud", "Versions & sync"],
+              ] as const
+            ).map(([id, label, hint]) => (
+              <button
+                key={id}
+                type="button"
+                className={`cc-growth-dash-card${tab === id ? " on" : ""}`}
+                onClick={() => setTab(id)}
+              >
+                <strong>{label}</strong>
+                <span>{hint}</span>
+              </button>
+            ))}
+          </div>
+
           {loading && (tab === "score" || tab === "copy" || tab === "thumbs") && (
             <GrowthSkeleton rows={tab === "score" ? 6 : 4} />
           )}

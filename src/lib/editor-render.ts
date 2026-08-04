@@ -27,6 +27,7 @@ import {
   DEFAULT_EXPORT,
   easeProgress,
   flattenCompounds,
+  resolveDelogoPixels,
   resolveMulticam,
   textHasContent,
 } from "./editor-types";
@@ -201,16 +202,79 @@ function atempoChain(speed: number): string[] {
   return stages;
 }
 
+/** Collect pixel boxes for watermark covers (AI names + corner presets). */
+function collectWmBoxes(
+  effects: ClipEffect[] | undefined,
+  w: number,
+  h: number,
+): { x: number; y: number; w: number; h: number }[] {
+  const boxes: { x: number; y: number; w: number; h: number }[] = [];
+  for (const fx of effects || []) {
+    if (!fx.enabled || fx.kind !== "delogo") continue;
+    for (const b of resolveDelogoPixels(w, h, fx)) {
+      // even sizes for yuv420 + keep inside frame with 2px margin
+      let x = Math.max(2, Math.min(b.x, w - 4));
+      let y = Math.max(2, Math.min(b.y, h - 4));
+      let bw = Math.max(16, Math.min(b.w, w - x - 2));
+      let bh = Math.max(12, Math.min(b.h, h - y - 2));
+      x -= x % 2;
+      y -= y % 2;
+      bw -= bw % 2;
+      bh -= bh % 2;
+      if (bw >= 16 && bh >= 12) boxes.push({ x, y, w: bw, h: bh });
+    }
+  }
+  return boxes;
+}
+
+/**
+ * Blur-patch covers for burned-in names/logos.
+ * delogo alone is too weak on text; crop → heavy blur → overlay actually hides it.
+ * Returns a filter graph fragment that ends with `[v]` (for `[0:v]…`).
+ */
+function videoGraphWithWmCovers(
+  linearFilters: string,
+  boxes: { x: number; y: number; w: number; h: number }[],
+  blurSigma: number,
+): string {
+  const base = linearFilters.trim() || "null";
+  if (!boxes.length) return `${base}[v]`;
+
+  const n = boxes.length;
+  const parts: string[] = [`${base}[wmbase0]`];
+  // split working copy + one crop stream per box
+  const splits = Array.from({ length: n }, (_, i) => `[wmc${i}]`).join("");
+  parts.push(`[wmbase0]split=${n + 1}[wmmain]${splits}`);
+
+  for (let i = 0; i < n; i++) {
+    const b = boxes[i];
+    parts.push(
+      `[wmc${i}]crop=${b.w}:${b.h}:${b.x}:${b.y},gblur=sigma=${blurSigma.toFixed(1)}:steps=2[wmb${i}]`,
+    );
+  }
+
+  let cur = "wmmain";
+  for (let i = 0; i < n; i++) {
+    const b = boxes[i];
+    const next = i === n - 1 ? "v" : `wmo${i}`;
+    parts.push(`[${cur}][wmb${i}]overlay=${b.x}:${b.y}[${next}]`);
+    cur = next;
+  }
+  return parts.join(";");
+}
+
 /**
  * Translate the clip's stackable effects into linear ffmpeg filters, applied
  * in order. Each entry is a single-input/single-output filter so they chain
  * cleanly onto the main clip filter graph.
+ * Note: delogo/watermark covers are applied separately via blur patches.
  */
 function effectVideoFilters(effects: ClipEffect[] | undefined, w: number, h: number): string[] {
   if (!effects || !effects.length) return [];
   const out: string[] = [];
   for (const fx of effects) {
     if (!fx.enabled) continue;
+    if (fx.kind === "delogo") continue; // handled by videoGraphWithWmCovers
     const a = clamp(fx.amount ?? 0, 0, 100) / 100;
     switch (fx.kind) {
       case "blur":
@@ -559,6 +623,16 @@ async function normalizeClip(opts: {
     return `lut3d='${lutPath.replace(/:/g, "\\:")}'`;
   });
 
+  const wmBoxes = collectWmBoxes(clip.effects, w, h);
+  const wmAmount = Math.max(
+    45,
+    ...(clip.effects || [])
+      .filter((e) => e.enabled && e.kind === "delogo")
+      .map((e) => e.amount ?? 45),
+  );
+  const wmSigma = 14 + (wmAmount / 100) * 22;
+  const vGraph = videoGraphWithWmCovers(vFilter, wmBoxes, wmSigma);
+
   // Adjustment layer: mid-gray grade bed (soft-light blended over program later).
   if (clip.adjustment || !asset) {
     args.push(
@@ -575,6 +649,7 @@ async function normalizeClip(opts: {
       "-i",
       `anullsrc=channel_layout=stereo:sample_rate=${SAMPLE_RATE}`,
       "-filter_complex",
+      // Insert alpha after wm covers: …[v] then re-label — keep simple for adj layers.
       `[0:v]${vFilter},format=yuva420p,colorchannelmixer=aa=0.72[v]`,
       "-map",
       "[v]",
@@ -599,7 +674,7 @@ async function normalizeClip(opts: {
       "-i",
       `anullsrc=channel_layout=stereo:sample_rate=${SAMPLE_RATE}`,
       "-filter_complex",
-      `[0:v]${vFilter}[v]`,
+      `[0:v]${vGraph}`,
       "-map",
       "[v]",
       "-map",
@@ -620,7 +695,7 @@ async function normalizeClip(opts: {
       const aFilter = clipAudioFilter(clip, len);
       args.push(
         "-filter_complex",
-        `[0:v]${vFilter}[v];[0:a]${aFilter}[a]`,
+        `[0:v]${vGraph};[0:a]${aFilter}[a]`,
         "-map",
         "[v]",
         "-map",
@@ -635,7 +710,7 @@ async function normalizeClip(opts: {
         "-i",
         `anullsrc=channel_layout=stereo:sample_rate=${SAMPLE_RATE}`,
         "-filter_complex",
-        `[0:v]${vFilter}[v]`,
+        `[0:v]${vGraph}`,
         "-map",
         "[v]",
         "-map",

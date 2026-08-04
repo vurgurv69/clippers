@@ -3,7 +3,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
 
-export type WorkspaceId = "editing" | "color" | "audio" | "deliver";
+export type WorkspaceId =
+  | "editing"
+  | "color"
+  | "audio"
+  | "deliver"
+  | "captions"
+  | "compact"
+  | "wide";
 
 type Props = {
   projectName?: string;
@@ -20,6 +27,7 @@ type Props = {
   canExport: boolean;
   onOpenKeymap: () => void;
   onOpenManual?: () => void;
+  onOpenGrowth?: () => void;
   floatBin?: boolean;
   floatInspector?: boolean;
   onToggleFloatBin?: () => void;
@@ -37,9 +45,15 @@ type Props = {
   onToggleMagnetic?: () => void;
   rippleEnabled?: boolean;
   onToggleRipple?: () => void;
+  saving?: boolean;
+  lastSavedAt?: string | null;
+  dirty?: boolean;
+  toolbarDensity?: "s" | "m" | "l";
+  onToolbarDensity?: (d: "s" | "m" | "l") => void;
+  onApplyWorkspace?: (w: WorkspaceId) => void;
 };
 
-/** CapCut-simple header: Logo · Project · Undo/Redo · Theme · Settings · Export */
+/** Studio 2.0 header: Left brand · Center undo/save · Right actions */
 export function StudioTopBar({
   projectName = "Untitled",
   darkTheme,
@@ -55,6 +69,7 @@ export function StudioTopBar({
   canExport,
   onOpenKeymap,
   onOpenManual,
+  onOpenGrowth,
   floatBin,
   floatInspector,
   onToggleFloatBin,
@@ -72,6 +87,12 @@ export function StudioTopBar({
   onToggleMagnetic,
   rippleEnabled = false,
   onToggleRipple,
+  saving = false,
+  lastSavedAt = null,
+  dirty = false,
+  toolbarDensity = "m",
+  onToolbarDensity,
+  onApplyWorkspace,
 }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
@@ -118,6 +139,15 @@ export function StudioTopBar({
     };
   }, [settingsOpen]);
 
+  const saveLabel = saving
+    ? "Saving…"
+    : dirty
+      ? "Unsaved"
+      : lastSavedAt
+        ? "Saved"
+        : "Saved";
+  const saveTone = saving ? "busy" : dirty ? "warn" : "ok";
+
   const settingsMenu =
     settingsOpen &&
     menuPos &&
@@ -137,6 +167,23 @@ export function StudioTopBar({
             <button type="button" className="cc-set-toggle" onClick={onToggleUiLarge}>
               {uiLarge ? "Large" : "Compact"}
             </button>
+          </label>
+        )}
+        {onToolbarDensity && (
+          <label className="cc-set-row">
+            <span>Toolbar icons</span>
+            <span className="cc-seg">
+              {(["s", "m", "l"] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={toolbarDensity === d ? "on" : undefined}
+                  onClick={() => onToolbarDensity(d)}
+                >
+                  {d.toUpperCase()}
+                </button>
+              ))}
+            </span>
           </label>
         )}
 
@@ -205,6 +252,35 @@ export function StudioTopBar({
             </button>
           </label>
         )}
+        {onApplyWorkspace && (
+          <>
+            <p className="settings-heading">Workspace</p>
+            {(
+              [
+                ["editing", "Editing"],
+                ["color", "Color"],
+                ["audio", "Audio"],
+                ["captions", "Captions"],
+                ["compact", "Compact"],
+                ["wide", "Wide"],
+                ["deliver", "Deliver"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="menuitem"
+                className="cc-set-link"
+                onClick={() => {
+                  onApplyWorkspace(id);
+                  setSettingsOpen(false);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </>
+        )}
 
         <p className="settings-heading">Help</p>
         {onOpenCommands && (
@@ -261,7 +337,7 @@ export function StudioTopBar({
     );
 
   return (
-    <header className="studio-top cc-top">
+    <header className="studio-top cc-top cc-top-v2">
       <div className="top-left">
         <button
           type="button"
@@ -292,20 +368,23 @@ export function StudioTopBar({
         <button type="button" className="btn icon-ghost" onClick={onRedo} disabled={!canRedo} title="Redo">
           ↷
         </button>
+        <span className={`cc-save-pill ${saveTone}`} title={lastSavedAt || undefined}>
+          {saveTone === "ok" ? "Saved ✓" : saveLabel}
+        </span>
       </div>
 
       <div className="top-right">
         <div className="top-actions">
           <button
             type="button"
-            className="btn cc-theme-btn"
+            className="btn cc-theme-btn cc-top-btn"
             onClick={() => setDarkTheme((d) => !d)}
             title={darkTheme ? "Switch to bright mode" : "Switch to dark mode"}
             aria-label={darkTheme ? "Switch to bright mode" : "Switch to dark mode"}
             aria-pressed={!darkTheme}
           >
             {darkTheme ? (
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
                 <circle cx="12" cy="12" r="4" fill="currentColor" />
                 <path
                   d="M12 2v2.2M12 19.8V22M4.2 12H2M22 12h-2.2M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"
@@ -315,7 +394,7 @@ export function StudioTopBar({
                 />
               </svg>
             ) : (
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
                 <path
                   d="M20.2 14.2A8.2 8.2 0 0 1 9.8 3.8 8.4 8.4 0 1 0 20.2 14.2Z"
                   fill="currentColor"
@@ -327,11 +406,25 @@ export function StudioTopBar({
           {onOpenManual && (
             <button
               type="button"
-              className="btn cc-top-btn cc-manual-btn"
+              className="btn cc-top-btn cc-manual-btn icon-only"
               onClick={onOpenManual}
               title="Studio manual"
+              aria-label="Studio manual"
             >
-              Manual
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden>
+                <path
+                  d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v16.5H7.5A2.5 2.5 0 0 0 5 21V4.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M5 18.5A2.5 2.5 0 0 1 7.5 16H19"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                />
+              </svg>
             </button>
           )}
 
@@ -348,6 +441,17 @@ export function StudioTopBar({
             </button>
             {settingsMenu}
           </div>
+
+          {onOpenGrowth && (
+            <button
+              type="button"
+              className="btn cc-top-btn"
+              onClick={onOpenGrowth}
+              title="Growth Hub"
+            >
+              Growth
+            </button>
+          )}
 
           {exporting ? (
             <button type="button" className="btn cc-top-btn" onClick={onCancelExport}>

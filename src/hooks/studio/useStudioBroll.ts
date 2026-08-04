@@ -103,12 +103,19 @@ export function useStudioBroll(args: StudioBrollArgs) {
         setTab("audio");
         return;
       }
+      // Always start from the full source — never inherit a prior split/trim.
+      const fullOut =
+        asset.kind === "image"
+          ? 4
+          : Math.max(0.1, Number(asset.duration) > 0 ? Number(asset.duration) : 4);
       const clip = defaultClip(asset, uid("clip"));
+      clip.inPoint = 0;
+      clip.outPoint = fullOut;
       const lane = opts?.lane;
       if (typeof lane === "number" && lane > 0) {
         clip.lane = lane;
         clip.tlStart = current;
-        if (asset.kind === "image") clip.outPoint = Math.min(clip.outPoint, 3);
+        if (asset.kind === "image") clip.outPoint = Math.min(fullOut, 3);
         setViewClips((prev) => [...prev, clip]);
         setSelectedId(clip.id);
         setSelectedIds([clip.id]);

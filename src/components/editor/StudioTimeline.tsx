@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type Dispatch, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type Dispatch, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { ClipStrip } from "@/components/editor/ClipStrip";
 import { TrackHeader, type TrackChrome } from "@/components/editor/TrackHeader";
 import { TimelineMinimap } from "@/components/editor/TimelineMinimap";
 import {
+  TRANSITION_DEFS,
   clipLane,
   clipLength,
   type MusicTrack,
@@ -12,10 +13,60 @@ import {
   type TextOverlay,
   type TimelineClip,
   type TimelineMarker,
+  type TransitionKind,
 } from "@/lib/editor-types";
 import type { ToolId } from "@/lib/edit-tools";
 import { clamp } from "@/lib/edit-tools";
 import { rafPointerMove } from "@/hooks/useRafPointer";
+import { usePlaybackClock } from "@/hooks/studio/playbackClock";
+import { TransitionEditPopover } from "@/components/editor/TransitionEditPopover";
+
+function transitionLabel(kind: TransitionKind) {
+  return TRANSITION_DEFS.find((t) => t.id === kind)?.label || kind;
+}
+
+/** Timecode — subscribes to playbackClock so the shell can stay throttled. */
+const TimelineTimecode = memo(function TimelineTimecode({
+  total,
+  fmt,
+}: {
+  total: number;
+  fmt: (t: number) => string;
+}) {
+  const t = usePlaybackClock();
+  return (
+    <span className="tl-time" title="Playhead / duration">
+      {fmt(t)}
+      <em> / {fmt(total)}</em>
+    </span>
+  );
+});
+
+/** Playhead needle — isolated rAF subscriber. */
+const TimelinePlayheadNeedle = memo(function TimelinePlayheadNeedle({
+  pxPerSec,
+  scrubMax,
+  onPointerDown,
+}: {
+  pxPerSec: number;
+  scrubMax: number;
+  onPointerDown: (e: ReactPointerEvent) => void;
+}) {
+  const t = usePlaybackClock();
+  return (
+    <div
+      className="playhead"
+      style={{ left: t * pxPerSec }}
+      onPointerDown={onPointerDown}
+      title="Drag to scrub"
+      role="slider"
+      aria-valuenow={t}
+      aria-valuemin={0}
+      aria-valuemax={scrubMax}
+      aria-label="Playhead"
+    />
+  );
+});
 
 function IconBtn({
   on,
@@ -112,6 +163,8 @@ export type TimelineTracks = {
 export type TimelineCtx = {
   expanded: boolean;
   setExpanded: Dispatch<SetStateAction<boolean>>;
+  /** Timeline dock height as viewport % (Studio 2.0). */
+  timelineHVh?: number;
   total: number;
   /** Scrubbable canvas length (at least as long as total; longer when empty). */
   scrubTotal?: number;
@@ -225,10 +278,11 @@ export type TimelineCtx = {
 export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
   const {
     expanded,
-    setExpanded,
+    setExpanded: _setExpanded,
+    timelineHVh,
     total,
     scrubTotal,
-    current,
+    current: _currentProp,
     fmt,
     snapEnabled,
     setSnapEnabled,
@@ -309,24 +363,21 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
     canDeleteSelection = false,
     onTransitionJunction,
   } = ctx;
+  void _currentProp;
+  void _setExpanded;
 
-  const [focusLane, setFocusLane] = useState<"video" | "music" | "text" | null>(
-    null,
-  );
+  const [audioExpanded, setAudioExpanded] = useState(false);
+  const [trEditId, setTrEditId] = useState<string | null>(null);
 
   const laneH = (
     id: "video" | "music" | "text" | "overlay" | "overlay2",
     track: TrackChrome,
   ) => {
-    if (track.collapsed) return 12;
-    const base = Math.max(track.height, id === "overlay" || id === "overlay2" ? 40 : 56);
-    if (!focusLane) return base;
-    if (focusLane === id) return Math.max(base, 110);
-    if (id === "video" || id === "music" || id === "text") {
-      return Math.min(base, 40);
-    }
-    return base;
+    if (id === "music") return audioExpanded ? Math.max(track.height, 52) : 32;
+    return Math.max(track.height, 52);
   };
+
+  const trEditClip = trEditId ? clips.find((c) => c.id === trEditId) : null;
 
   const scrubMax = scrubTotal ?? Math.max(total, 60);
 
@@ -461,32 +512,21 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
   };
 
   return (
-    <section className={`studio-timeline${expanded ? " expanded" : ""}`}>
-      <div className="timeline-bar">
+    <section
+      className={`studio-timeline${expanded ? " expanded" : ""}`}
+      style={
+        timelineHVh
+          ? ({
+              ["--cc-timeline" as string]: `${timelineHVh}vh`,
+              height: `${timelineHVh}vh`,
+              maxHeight: `${timelineHVh}vh`,
+              minHeight: 280,
+            } as CSSProperties)
+          : undefined
+      }
+    >
+      <div className="timeline-bar tl-bar-compact">
                   <div className="timeline-tools left tl-playback">
-                    <button
-                      type="button"
-                      className={playing ? "btn tl-play on" : "btn tl-play"}
-                      onClick={() => onTogglePlay?.()}
-                      title="Play / pause (Space)"
-                      aria-label={playing ? "Pause" : "Play"}
-                    >
-                      {playing ? (
-                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
-                          <rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor" />
-                          <rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor" />
-                        </svg>
-                      ) : (
-                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
-                          <path d="M4 2.5v11l10-5.5L4 2.5z" fill="currentColor" />
-                        </svg>
-                      )}
-                    </button>
-                    <span className="tl-time" title="Playhead / duration">
-                      {fmt(current)}
-                      <em> / {fmt(total)}</em>
-                    </span>
-                    <span className="toolbar-divider" aria-hidden />
                     <IconBtn
                       on={guidesThirds}
                       onClick={() => onToggleGuides?.()}
@@ -532,7 +572,6 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         }}
                         aria-label="Master volume"
                       />
-                      <em>{Math.round((muted ? 0 : masterVolume) * 100)}</em>
                     </label>
                     <IconBtn
                       onClick={() => splitAtPlayhead()}
@@ -576,12 +615,32 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         onClick={onExitCompound}
                         title="Exit compound — return to parent timeline"
                       >
-                        Exit compound{nestDepth > 1 ? ` (${nestDepth})` : ""}
+                        Exit nest
                       </button>
                     )}
                   </div>
-                  {/* Timeline chrome — zoom / height / speed (Snap·Magnet·Ripple·Proxy live in Extra) */}
+                  <div className="timeline-tools center tl-play-center">
+                    <button
+                      type="button"
+                      className={playing ? "btn tl-play on" : "btn tl-play"}
+                      onClick={() => onTogglePlay?.()}
+                      title="Play / pause (Space)"
+                      aria-label={playing ? "Pause" : "Play"}
+                    >
+                      {playing ? (
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                          <rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor" />
+                          <rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+                          <path d="M4 2.5v11l10-5.5L4 2.5z" fill="currentColor" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
                   <div className="timeline-tools timeline-pro-tools" role="toolbar" aria-label="Timeline options">
+                    <TimelineTimecode total={total} fmt={fmt} />
                     <label className="tl-zoom" title="Timeline zoom (Ctrl + wheel)">
                       <span>Zoom</span>
                       <input
@@ -595,25 +654,10 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         aria-label="Timeline zoom"
                       />
                     </label>
-                    <IconBtn
-                      on={expanded}
-                      onClick={() => setExpanded((e) => !e)}
-                      title={expanded ? "Compact track height" : "Tall track height"}
-                      label={expanded ? "Compact" : "Tall"}
-                    >
-                      <svg viewBox="0 0 16 16" width="14" height="14">
-                        {expanded ? (
-                          <path d="M3 6.5h10M3 9.5h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                        ) : (
-                          <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                        )}
-                      </svg>
-                    </IconBtn>
-                    <span className="toolbar-divider" aria-hidden />
                     <SpeedMenu rate={rate} onSetRate={onSetRate} />
                   </div>
                 </div>
-      
+
                 <div
                   className="timeline-scroll"
                   ref={trackRef}
@@ -688,19 +732,77 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                       </div>
                     )}
       
-                    {/* ═══ 1 · VIDEO timeline ═══ */}
-                    <div
-                      className={`lane-wrap tl-lane tl-video${focusLane === "video" ? " focused" : ""}`}
-                      onPointerDownCapture={() => setFocusLane("video")}
-                    >
-                    <div className="tl-lane-label" aria-hidden>
-                      Video
-                    </div>
+                    {/* Composite timeline: bubbles + video + audio under */}
+                    <div className="lane-wrap tl-lane tl-stack focused single-lane">
                     <TrackHeader
                       track={tracks.video}
                       onPatch={(p) => patchTrack("video", p)}
                       count={clips.filter((c) => clipLane(c) === 0).length}
                     />
+
+                    {(clips.some((c) => clipLane(c) >= 1) || texts.length > 0) && (
+                    <div className="tl-bubble-rail" aria-label="Overlays and text">
+                      {clips.map((c, i) => {
+                        if (clipLane(c) < 1) return null;
+                        const asset = assetById.get(c.assetId);
+                        const left = starts[i] * pxPerSec;
+                        if (!clipInView(left, 48)) return null;
+                        const isOn = selectedIds.includes(c.id);
+                        return (
+                          <button
+                            key={`bub-ov-${c.id}`}
+                            type="button"
+                            className={`tl-bubble overlay${isOn ? " on" : ""}`}
+                            style={{ left }}
+                            title={`${asset?.name || "Overlay"} @ ${fmt(starts[i] ?? 0)}`}
+                            onPointerDown={(e) => {
+                              e.stopPropagation();
+                              onClipBodyDown(
+                                e,
+                                c,
+                                i,
+                                tracks.overlay.locked,
+                                "Overlay track is locked",
+                                Math.max(1, clipLane(c)),
+                              );
+                              setTab("clip");
+                            }}
+                          >
+                            {c.adjustment ? "ADJ" : asset?.name?.slice(0, 10) || "OV"}
+                          </button>
+                        );
+                      })}
+                      {texts.map((t) => {
+                        const left = t.start * pxPerSec;
+                        if (!clipInView(left, 48)) return null;
+                        return (
+                          <button
+                            key={`bub-tx-${t.id}`}
+                            type="button"
+                            className={`tl-bubble text${selectedTextId === t.id ? " on" : ""}`}
+                            style={{ left }}
+                            title={`${t.text.slice(0, 40)} @ ${fmt(t.start)}`}
+                            onPointerDown={(e) => {
+                              e.stopPropagation();
+                              if (tracks.text.locked) {
+                                pushToast("Text track is locked", "info");
+                                return;
+                              }
+                              setSelectedTextId(t.id);
+                              setSelectedId(null);
+                              setSelectedIds([]);
+                              setTab("text");
+                              const base = t.start;
+                              dragHandle(e.clientX, (d) => patchText(t.id, { start: snapSec(base + d) }));
+                            }}
+                          >
+                            T {t.text.slice(0, 8) || "Text"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    )}
+
                     {!tracks.video.hidden && (
                     <div
                       className="track track-clips"
@@ -742,18 +844,15 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                             />
                           );
                         }
-                        const maxOut = asset?.kind === "image" ? 30 : asset?.duration ?? c.outPoint;
                         const isOn = selectedIds.includes(c.id);
                         return (
                           <div
                             key={c.id}
-                            className={`clip-block${isOn ? " on" : ""}${c.adjustment ? " adjustment" : ""}${c.compound ? " compound" : ""}${c.multicamId ? " multicam" : ""}${c.multicamActive ? " live" : ""}${c.multicamId && !c.multicamActive ? " mc-inactive" : ""}`}
+                            className={`clip-block${isOn ? " on" : ""}${c.adjustment ? " adjustment" : ""}${c.compound ? " compound" : ""}`}
                             style={{
                               left,
                               width,
                               borderColor: tracks.video.color,
-                              opacity: c.multicamId && !c.multicamActive ? 0.35 : undefined,
-                              zIndex: c.multicamId && !c.multicamActive ? 0 : 1,
                             }}
                             onContextMenu={(e) => {
                               e.preventDefault();
@@ -774,66 +873,14 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                             {asset && (asset.kind === "video" || asset.kind === "image") && (
                               <ClipStrip asset={asset} clip={c} width={width} url={thumbUrl} />
                             )}
-                            {asset?.kind === "video" && asset.hasAudio && width > 48 && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                className="wave-img clip-wave"
-                                src={waveformUrl(asset, Math.min(800, Math.round(width)), 28)}
-                                alt=""
-                                draggable={false}
-                              />
-                            )}
-                            {(c.keyframes || []).map((kf) => (
-                              <span
-                                key={kf.id}
-                                className="kf-diamond"
-                                style={{ left: `${clamp(kf.t, 0, 1) * 100}%` }}
-                                title={`Keyframe @ ${(kf.t * 100).toFixed(0)}% — drag to move`}
-                                onPointerDown={(e) => {
-                                  e.stopPropagation();
-                                  e.preventDefault();
-                                  const clipEl = (e.currentTarget as HTMLElement).parentElement;
-                                  if (!clipEl) return;
-                                  const move = (ev: PointerEvent) => {
-                                    const rect = clipEl.getBoundingClientRect();
-                                    const t = clamp((ev.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-                                    moveKeyframe(c.id, kf.id, t);
-                                  };
-                                  const up = () => {
-                                    window.removeEventListener("pointermove", move);
-                                    window.removeEventListener("pointerup", up);
-                                  };
-                                  window.addEventListener("pointermove", move);
-                                  window.addEventListener("pointerup", up);
-                                }}
-                              />
-                            ))}
-                            {c.transition !== "none" && (
-                              <span className="clip-balloon">{c.transition}</span>
-                            )}
                             <span
                               className="clip-handle left"
                               onPointerDown={(e) => onEdgeDown(e, c, "left")}
                             />
                             <span className="clip-label">
-                              {c.compound
-                                ? `▣ CMP (${c.children?.length || 0})`
-                                : c.multicamId
-                                  ? `${c.multicamActive ? "●" : "○"} ${asset?.name?.slice(0, 12) || "cam"}`
-                                  : (
-                                    <>
-                                      {asset?.kind === "image" ? "🖼" : "🎬"}{" "}
-                                      {asset?.name?.slice(0, 14) || "clip"}
-                                    </>
-                                  )}
+                              {asset?.kind === "image" ? "🖼" : "🎬"}{" "}
+                              {asset?.name?.slice(0, 14) || "clip"}
                               {(c.speed || 1) !== 1 && <em className="tr-badge">{c.speed}×</em>}
-                              {music?.linkedClipId === c.id && <em className="tr-badge">A/V</em>}
-                              {c.linkedAudio === false && music?.linkedClipId !== c.id && (
-                                <em className="tr-badge">muted</em>
-                              )}
-                              {(c.effects || []).some((f) => f.enabled) && (
-                                <em className="tr-badge fx">fx {(c.effects || []).filter((f) => f.enabled).length}</em>
-                              )}
                             </span>
                             <span
                               className="clip-handle right"
@@ -842,7 +889,6 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           </div>
                         );
                       })}
-                      {/* White bubbles at cuts between main clips */}
                       {(() => {
                         const mains = clips
                           .map((c, i) => ({ c, i, s: starts[i] ?? 0 }))
@@ -854,123 +900,56 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                           )
                           .sort((a, b) => a.s - b.s || a.i - b.i);
                         return mains.slice(0, -1).map((a) => {
+                          const has = a.c.transition !== "none";
+                          const dur = has ? Math.max(0.15, a.c.transitionDuration || 0.5) : 0.28;
+                          // Grow to the right into the next clip from the cut point.
                           const boundary = a.s + clipLength(a.c);
                           const left = boundary * pxPerSec;
-                          if (!clipInView(left - 12, 24)) return null;
-                          const has = a.c.transition !== "none";
+                          const width = Math.max(44, dur * pxPerSec);
+                          if (!clipInView(left, width)) return null;
+                          const label = has ? transitionLabel(a.c.transition) : "+";
                           return (
                             <button
-                              key={`tr-j-${a.c.id}`}
+                              key={`tr-box-${a.c.id}`}
                               type="button"
-                              className={has ? "tr-junction on" : "tr-junction"}
-                              style={{ left }}
+                              className={`tr-box${has ? " on" : ""}${trEditId === a.c.id ? " editing" : ""}`}
+                              style={{ left, width }}
                               title={
                                 has
-                                  ? `${a.c.transition} — click to preview / change`
-                                  : "Add transition between clips"
+                                  ? `${label} · ${dur.toFixed(2)}s — click to edit`
+                                  : "Add transition"
                               }
                               onPointerDown={(e) => {
                                 e.stopPropagation();
                                 e.preventDefault();
-                                onTransitionJunction?.(a.c.id);
+                                selectClip(a.c.id);
+                                setSelectedIds([a.c.id]);
+                                setTrEditId(a.c.id);
+                                if (!has) onTransitionJunction?.(a.c.id);
                               }}
                             >
-                              <span aria-hidden>{has ? "✦" : "+"}</span>
+                              <span className="tr-box-label">{label}</span>
                             </button>
                           );
                         });
                       })()}
                     </div>
                     )}
-                    <TrackHeader
-                      track={{ ...tracks.overlay, name: "Overlay" }}
-                      onPatch={(p) => patchTrack("overlay", p)}
-                      count={clips.filter((c) => clipLane(c) >= 1).length}
-                    />
-                    {!tracks.overlay.hidden && (
-                    <div
-                      className="track track-clips overlay-lane"
-                      style={{ height: tracks.overlay.collapsed ? 12 : tracks.overlay.height, opacity: tracks.overlay.muted ? 0.55 : 1 }}
-                    >
-                      {clips.map((c, i) => {
-                        if (clipLane(c) < 1) return null;
-                        const asset = assetById.get(c.assetId);
-                        const len = clipLength(c);
-                        const left = starts[i] * pxPerSec;
-                        const width = len * pxPerSec;
-                        if (!clipInView(left, width)) {
-                          return (
-                            <div
-                              key={c.id}
-                              className="clip-block overlay ghost"
-                              style={{ left, width, borderColor: tracks.overlay.color }}
-                              aria-hidden
-                            />
-                          );
-                        }
-                        const isOn = selectedIds.includes(c.id);
-                        return (
-                          <div
-                            key={c.id}
-                            className={`clip-block overlay${isOn ? " on" : ""}${c.adjustment ? " adjustment" : ""}`}
-                            style={{ left, width, borderColor: tracks.overlay.color }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              selectClip(c.id, e);
-                              setCtxMenu({ x: e.clientX, y: e.clientY, clipId: c.id });
-                            }}
-                            onPointerDown={(e) =>
-                              onClipBodyDown(e, c, i, tracks.overlay.locked, "Overlay track is locked", Math.max(1, clipLane(c)))
-                            }
-                          >
-                            {asset && (asset.kind === "video" || asset.kind === "image") && (
-                              <ClipStrip asset={asset} clip={c} width={width} url={thumbUrl} />
-                            )}
-                            <span
-                              className="clip-handle left"
-                              onPointerDown={(e) => onEdgeDown(e, c, "left")}
-                            />
-                            <span className="clip-label">
-                              {c.adjustment ? "▨ ADJ" : `▣ ${asset?.name?.slice(0, 12) || "Overlay"}`}
-                            </span>
-                            <span
-                              className="clip-handle right"
-                              onPointerDown={(e) => onEdgeDown(e, c, "right")}
-                            />
-                          </div>
-                        );
-                      })}
-                      {clips.every((c) => clipLane(c) < 1) && (
-                        <span className="lane-empty">Cutaways & B-roll land here</span>
-                      )}
-                    </div>
-                    )}
-                    </div>
-      
-                    {/* ═══ 2 · AUDIO timeline ═══ */}
-                    <div
-                      className={`lane-wrap tl-lane tl-audio${focusLane === "music" ? " focused" : ""}`}
-                      onPointerDownCapture={() => setFocusLane("music")}
-                    >
-                    <div className="tl-lane-label" aria-hidden>
-                      Audio
-                    </div>
-                    <TrackHeader
-                      track={tracks.music}
-                      onPatch={(p) => patchTrack("music", p)}
-                      count={(music ? 1 : 0) + musicTracks.length}
-                    />
+
                     {!tracks.music.hidden && (
                     <div
-                      className="track track-audio"
+                      className={`track track-audio tl-audio-under${audioExpanded ? " expanded" : ""}`}
                       style={{ height: laneH("music", tracks.music), opacity: tracks.music.muted ? 0.55 : 1 }}
                       onPointerDown={(e) => {
-                        if (e.target === e.currentTarget) beginPlayheadDrag(e);
+                        if (e.target === e.currentTarget) {
+                          setAudioExpanded(true);
+                          beginPlayheadDrag(e);
+                        }
                       }}
                     >
                       {music && musicAsset ? (
                         <div
-                          className="audio-block"
+                          className={`audio-block${audioExpanded ? " on" : ""}`}
                           style={{
                             left: music.start * pxPerSec,
                             width: Math.max(24, (music.outPoint - music.inPoint) * pxPerSec),
@@ -981,6 +960,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                               pushToast("Music track is locked", "info");
                               return;
                             }
+                            setAudioExpanded(true);
                             setTab("audio");
                             const base = music.start;
                             dragHandle(e.clientX, (d) => patchMusic({ start: snapSec(base + d) }));
@@ -988,29 +968,37 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img className="wave-img" src={waveformUrl(musicAsset)} alt="" draggable={false} />
-                          <span
-                            className="clip-handle left"
-                            onPointerDown={(e) => {
-                              e.stopPropagation();
-                              const base = music.inPoint;
-                              dragHandle(e.clientX, (d) =>
-                                patchMusic({ inPoint: clamp(base + d, 0, music.outPoint - 0.5) }),
-                              );
-                            }}
-                          />
+                          {audioExpanded && (
+                            <span
+                              className="clip-handle left"
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                const base = music.inPoint;
+                                dragHandle(e.clientX, (d) =>
+                                  patchMusic({ inPoint: clamp(base + d, 0, music.outPoint - 0.5) }),
+                                );
+                              }}
+                            />
+                          )}
                           <span className="clip-label">♪ {musicAsset.name.slice(0, 18)}</span>
-                          <span
-                            className="clip-handle right"
-                            onPointerDown={(e) => {
-                              e.stopPropagation();
-                              const base = music.outPoint;
-                              dragHandle(e.clientX, (d) =>
-                                patchMusic({
-                                  outPoint: clamp(base + d, music.inPoint + 0.5, musicAsset.duration || base + d),
-                                }),
-                              );
-                            }}
-                          />
+                          {audioExpanded && (
+                            <span
+                              className="clip-handle right"
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                const base = music.outPoint;
+                                dragHandle(e.clientX, (d) =>
+                                  patchMusic({
+                                    outPoint: clamp(
+                                      base + d,
+                                      music.inPoint + 0.5,
+                                      musicAsset.duration || base + d,
+                                    ),
+                                  }),
+                                );
+                              }}
+                            />
+                          )}
                         </div>
                       ) : null}
                       {musicTracks.map((m, i) => {
@@ -1018,7 +1006,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         return (
                           <div
                             key={`sfx-${m.assetId}-${i}`}
-                            className="audio-block sfx"
+                            className={`audio-block sfx${audioExpanded ? " on" : ""}`}
                             style={{
                               left: m.start * pxPerSec,
                               width: Math.max(24, (m.outPoint - m.inPoint) * pxPerSec),
@@ -1029,145 +1017,53 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                                 pushToast("Music track is locked", "info");
                                 return;
                               }
+                              setAudioExpanded(true);
                               setTab("audio");
                               const base = m.start;
                               dragHandle(e.clientX, (d) =>
                                 patchMusicTrack(i, { start: snapSec(base + d) }),
                               );
                             }}
-                            onContextMenu={(e) => {
-                              e.preventDefault();
-                              removeMusicTrack(i);
-                              pushToast("SFX lane removed", "info");
-                            }}
                           >
                             {a ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img className="wave-img" src={waveformUrl(a)} alt="" draggable={false} />
                             ) : null}
-                            <span
-                              className="clip-handle left"
-                              onPointerDown={(e) => {
-                                e.stopPropagation();
-                                const base = m.inPoint;
-                                dragHandle(e.clientX, (d) =>
-                                  patchMusicTrack(i, {
-                                    inPoint: clamp(base + d, 0, m.outPoint - 0.5),
-                                  }),
-                                );
-                              }}
-                            />
                             <span className="clip-label">
-                              ♪ {a?.name?.slice(0, 16) || `SFX ${i + 1}`}
+                              ♪ {a?.name?.slice(0, 14) || `SFX ${i + 1}`}
                             </span>
-                            <span
-                              className="clip-handle right"
-                              onPointerDown={(e) => {
-                                e.stopPropagation();
-                                const base = m.outPoint;
-                                dragHandle(e.clientX, (d) =>
-                                  patchMusicTrack(i, {
-                                    outPoint: clamp(
-                                      base + d,
-                                      m.inPoint + 0.5,
-                                      a?.duration || base + d,
-                                    ),
-                                  }),
-                                );
-                              }}
-                            />
                           </div>
                         );
                       })}
                       {!music && !musicTracks.length && (
-                        <span className="lane-empty">No audio — add music or SFX here</span>
+                        <span className="lane-empty soft">Audio</span>
                       )}
                     </div>
                     )}
                     </div>
-      
-                    {/* ═══ 3 · TEXT timeline ═══ */}
-                    <div
-                      className={`lane-wrap tl-lane tl-text${focusLane === "text" ? " focused" : ""}`}
-                      onPointerDownCapture={() => setFocusLane("text")}
-                    >
-                    <div className="tl-lane-label" aria-hidden>
-                      Text
-                    </div>
-                    <TrackHeader
-                      track={tracks.text}
-                      onPatch={(p) => patchTrack("text", p)}
-                      count={texts.length}
-                    />
-                    {!tracks.text.hidden && (
-                    <div
-                      className="track track-text"
-                      style={{ height: laneH("text", tracks.text), opacity: 1 }}
-                      onPointerDown={(e) => {
-                        if (e.target === e.currentTarget) beginPlayheadDrag(e);
-                      }}
-                    >
-                      {texts.map((t) => (
-                        <div
-                          key={t.id}
-                          className={`text-block${selectedTextId === t.id ? " on" : ""}`}
-                          style={{
-                            left: t.start * pxPerSec,
-                            width: Math.max(24, t.duration * pxPerSec),
-                            borderColor: tracks.text.color,
+
+                    {trEditClip && (
+                      <div className="tr-edit-layer" onPointerDown={(e) => e.stopPropagation()}>
+                        <TransitionEditPopover
+                          kind={trEditClip.transition}
+                          duration={trEditClip.transitionDuration || 0.5}
+                          onKind={(k) => {
+                            patchClip(trEditClip.id, { transition: k });
                           }}
-                          onPointerDown={(e) => {
-                            if (tracks.text.locked) {
-                              pushToast("Text track is locked", "info");
-                              return;
-                            }
-                            setSelectedTextId(t.id);
-                            setSelectedId(null);
-                            setSelectedIds([]);
-                            setTab("text");
-                            const base = t.start;
-                            dragHandle(e.clientX, (d) => patchText(t.id, { start: snapSec(base + d) }));
+                          onDuration={(d) => patchClip(trEditClip.id, { transitionDuration: d })}
+                          onClose={() => setTrEditId(null)}
+                          onClear={() => {
+                            patchClip(trEditClip.id, { transition: "none" });
+                            setTrEditId(null);
                           }}
-                        >
-                          <span
-                            className="clip-handle left"
-                            onPointerDown={(e) => {
-                              e.stopPropagation();
-                              const baseStart = t.start;
-                              const baseDur = t.duration;
-                              dragHandle(e.clientX, (d) => {
-                                const ns = Math.max(0, baseStart + d);
-                                const nd = Math.max(0.5, baseDur - (ns - baseStart));
-                                patchText(t.id, { start: ns, duration: nd });
-                              });
-                            }}
-                          />
-                          <span className="clip-label">T {t.text.slice(0, 16)}</span>
-                          <span
-                            className="clip-handle right"
-                            onPointerDown={(e) => {
-                              e.stopPropagation();
-                              const base = t.duration;
-                              dragHandle(e.clientX, (d) => patchText(t.id, { duration: Math.max(0.5, base + d) }));
-                            }}
-                          />
-                        </div>
-                      ))}
-                      {!texts.length && <span className="lane-empty">No text — press Text to add a title</span>}
-                    </div>
+                        />
+                      </div>
                     )}
-                    </div>
-      
-                    <div
-                      className="playhead"
-                      style={{ left: current * pxPerSec }}
+
+                    <TimelinePlayheadNeedle
+                      pxPerSec={pxPerSec}
+                      scrubMax={scrubMax}
                       onPointerDown={beginPlayheadDrag}
-                      title="Drag to scrub"
-                      role="slider"
-                      aria-valuenow={current}
-                      aria-valuemin={0}
-                      aria-valuemax={scrubMax}
-                      aria-label="Playhead"
                     />
                   </div>
                 </div>
@@ -1176,7 +1072,6 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                   clips={clips}
                   starts={starts}
                   total={scrubMax}
-                  current={current}
                   selectedIds={selectedIds}
                   music={music}
                   mainColor={tracks.video.color}

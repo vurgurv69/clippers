@@ -113,7 +113,8 @@ export function useStudioTimelineOps(args: StudioTimelineOpsArgs) {
 
   const clipInView = useCallback(
     (leftPx: number, widthPx: number) => {
-      const pad = 320;
+      // Studio 2.0: tighter horizontal window — only mount rich ClipStrips near viewport.
+      const pad = 180;
       return (
         leftPx + widthPx > viewScroll.left - pad &&
         leftPx < viewScroll.left + viewScroll.width + pad

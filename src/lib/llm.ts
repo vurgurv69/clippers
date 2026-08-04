@@ -61,6 +61,69 @@ export async function llmComplete(opts: {
   }
 }
 
+/**
+ * Vision chat — user content can mix text + images (data URLs or https).
+ * Used for watermark / burned-in name detection.
+ */
+export async function llmVision(opts: {
+  system: string;
+  text: string;
+  /** data:image/jpeg;base64,... or https URLs */
+  images: string[];
+  maxTokens?: number;
+  temperature?: number;
+}): Promise<LlmResult> {
+  const key = process.env.OPENAI_API_KEY?.trim();
+  if (!key) return { text: "", usedLlm: false };
+  if (!opts.images.length) return { text: "", usedLlm: false };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const content: Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string; detail?: string } }
+    > = [{ type: "text", text: opts.text }];
+    for (const url of opts.images.slice(0, 6)) {
+      content.push({
+        type: "image_url",
+        image_url: { url, detail: "low" },
+      });
+    }
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_VISION_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+        temperature: opts.temperature ?? 0.1,
+        max_tokens: opts.maxTokens ?? 900,
+        messages: [
+          { role: "system", content: opts.system },
+          { role: "user", content },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn("[llm-vision] OpenAI error", res.status, await res.text().catch(() => ""));
+      return { text: "", usedLlm: false };
+    }
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const text = data.choices?.[0]?.message?.content?.trim() ?? "";
+    return { text, usedLlm: Boolean(text) };
+  } catch (e) {
+    console.warn("[llm-vision] request failed", e);
+    return { text: "", usedLlm: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Parse JSON from an LLM reply (strips markdown fences). */
 export function parseLlmJson<T>(raw: string): T | null {
   if (!raw.trim()) return null;

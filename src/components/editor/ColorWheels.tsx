@@ -10,7 +10,7 @@ type WheelProps = {
 };
 
 /**
- * Lift / Gamma / Gain pad — full 2D drag inside the circle.
+ * Lift / Gain / Gamma pad — full 2D drag inside the circle.
  * Vertical = strength (− down / + up). Horizontal also contributes so you can steer freely.
  */
 function ColorWheel({ label, value, onChange, hue = "#1f9d7a" }: WheelProps) {
@@ -90,17 +90,30 @@ export function ColorWheelsRow({
   gamma,
   gain,
   onChange,
+  onReset,
 }: {
   lift: number;
   gamma: number;
   gain: number;
   onChange: (patch: { lift?: number; gamma?: number; gain?: number }) => void;
+  /** Clear Lift / Gain / Gamma to neutral. */
+  onReset?: () => void;
 }) {
   return (
-    <div className="color-wheels">
-      <ColorWheel label="Lift" value={lift} hue="#5b8fd9" onChange={(v) => onChange({ lift: v })} />
-      <ColorWheel label="Gamma" value={gamma} hue="#1f9d7a" onChange={(v) => onChange({ gamma: v })} />
-      <ColorWheel label="Gain" value={gain} hue="#d4a017" onChange={(v) => onChange({ gain: v })} />
+    <div className="color-wheels-block">
+      {onReset && (
+        <div className="color-wheels-head">
+          <span className="cw-head-label">Shadows · mid · highlights</span>
+          <button type="button" className="btn tiny insp-reset-btn" onClick={onReset} title="Reset wheels">
+            Reset
+          </button>
+        </div>
+      )}
+      <div className="color-wheels">
+        <ColorWheel label="Lift" value={lift} hue="#5b8fd9" onChange={(v) => onChange({ lift: v })} />
+        <ColorWheel label="Gain" value={gain} hue="#d4a017" onChange={(v) => onChange({ gain: v })} />
+        <ColorWheel label="Gamma" value={gamma} hue="#1f9d7a" onChange={(v) => onChange({ gamma: v })} />
+      </div>
     </div>
   );
 }
@@ -212,6 +225,17 @@ export function HueColorWheel({ value = "#ffffff", onPick }: HueWheelProps) {
 
   return (
     <div className="hue-wheel-wrap">
+      <div className="color-wheels-head">
+        <span className="cw-head-label">Tint</span>
+        <button
+          type="button"
+          className="btn tiny insp-reset-btn"
+          title="Reset tint"
+          onClick={() => commit("#ffffff")}
+        >
+          Reset
+        </button>
+      </div>
       <button
         type="button"
         className="hue-wheel-pad"

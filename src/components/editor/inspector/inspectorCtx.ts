@@ -68,8 +68,9 @@ export type InspectorPanelCtx = {
   updateEffect: (
     clipId: string,
     fxId: string,
-    patch: Partial<{ enabled: boolean; amount: number }>,
+    patch: Partial<import("@/lib/editor-types").ClipEffect>,
   ) => void;
+  setEffects?: (clipId: string, next: import("@/lib/editor-types").ClipEffect[]) => void;
   moveEffect: (clipId: string, fxId: string, dir: -1 | 1) => void;
   removeEffect: (clipId: string, fxId: string) => void;
   detachClipAudio: (clipId: string) => void;

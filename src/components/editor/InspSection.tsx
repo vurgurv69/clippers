@@ -44,19 +44,24 @@ export function InspSection({
 
   if (!filterMatch) return null;
 
+  const panelId = `insp-sec-${id}`;
   return (
     <div className={`insp-section${open ? " open" : ""}`}>
       <button
         type="button"
         className="insp-section-head"
         aria-expanded={open}
+        aria-controls={panelId}
+        id={`${panelId}-btn`}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="insp-section-title">{title}</span>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="insp-section-chevron" aria-hidden>
+          {open ? "▾" : "▸"}
+        </span>
       </button>
       {open && (
-        <div className="insp-section-body">
+        <div className="insp-section-body" id={panelId} role="region" aria-labelledby={`${panelId}-btn`}>
           {hint ? <p className="insp-section-hint">{hint}</p> : null}
           {children}
         </div>

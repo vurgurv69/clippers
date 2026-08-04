@@ -62,7 +62,14 @@ import { useStudioClipPatch } from "@/hooks/studio/useStudioClipPatch";
 import { useStudioWorkspace } from "@/hooks/studio/useStudioWorkspace";
 import { useStudioFavs } from "@/hooks/studio/useStudioFavs";
 import { useStudioShellBoot } from "@/hooks/studio/useStudioShellBoot";
-import { startPanelResize as beginPanelResize } from "@/lib/studio-panel-resize";
+import {
+  startPanelResize as beginPanelResize,
+  startTimelineResize,
+  resetPanelWidth,
+  DEFAULT_BIN_W,
+  DEFAULT_INSPECTOR_W,
+  DEFAULT_TIMELINE_H,
+} from "@/lib/studio-panel-resize";
 import { buildStudioInspectorCtx } from "@/components/editor/inspector/buildStudioInspectorCtx";
 import { getClipsAtPath, updateClipsAtPath } from "@/lib/studio-nest";
 import {
@@ -81,18 +88,8 @@ import {
 import { InspectorTabPanels } from "@/components/editor/inspector/InspectorTabPanels";
 import { StudioTimeline } from "@/components/editor/StudioTimeline";
 import { StudioTopBar, type WorkspaceId } from "@/components/editor/StudioTopBar";
-import { StudioToolbar } from "@/components/editor/StudioToolbar";
 import { StudioSidebar, type SidebarTab } from "@/components/editor/StudioSidebar";
 import { StudioMediaBin } from "@/components/editor/StudioMediaBin";
-import {
-  AnimationLibrary,
-  EffectLibrary,
-  FilterLibrary,
-  StickerLibrary,
-  TextLibrary,
-  TransitionLibrary,
-} from "@/components/editor/library/CapCutLibraries";
-import { TemplateLibrary } from "@/components/editor/library/TemplateLibrary";
 import { StudioStatusBar } from "@/components/editor/StudioStatusBar";
 import { ClipContextMenu } from "@/components/editor/ClipContextMenu";
 import { AiAssistantPanel } from "@/components/editor/ai/AiAssistantPanel";
@@ -105,6 +102,56 @@ const ExportDialog = dynamic(
   () =>
     import("@/components/editor/ExportDialog").then((m) => ({ default: m.ExportDialog })),
   { ssr: false },
+);
+
+const EffectLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/CapCutLibraries").then((m) => ({
+      default: m.EffectLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading effects…</div> },
+);
+const TransitionLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/CapCutLibraries").then((m) => ({
+      default: m.TransitionLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading transitions…</div> },
+);
+const FilterLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/CapCutLibraries").then((m) => ({
+      default: m.FilterLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading filters…</div> },
+);
+const AnimationLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/CapCutLibraries").then((m) => ({
+      default: m.AnimationLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading animations…</div> },
+);
+const TextLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/CapCutLibraries").then((m) => ({
+      default: m.TextLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading text…</div> },
+);
+const StickerLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/CapCutLibraries").then((m) => ({
+      default: m.StickerLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading stickers…</div> },
+);
+const TemplateLibrary = dynamic(
+  () =>
+    import("@/components/editor/library/TemplateLibrary").then((m) => ({
+      default: m.TemplateLibrary,
+    })),
+  { ssr: false, loading: () => <div className="cc-panel-skeleton">Loading templates…</div> },
 );
 const CommandPalette = dynamic(
   () =>
@@ -192,18 +239,21 @@ export function StudioEditor({
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [pxPerSec, setPxPerSec] = useState(70);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [rippleEnabled, setRippleEnabled] = useState(true);
   const [darkTheme, setDarkTheme] = useState(true);
-  const [binW, setBinW] = useState(340);
-  const [inspectorW, setInspectorW] = useState(280);
+  const [binW, setBinW] = useState(DEFAULT_BIN_W);
+  const [inspectorW, setInspectorW] = useState(DEFAULT_INSPECTOR_W);
+  const [timelineHVh, setTimelineHVh] = useState(DEFAULT_TIMELINE_H);
   const [floatBin, setFloatBin] = useState(false);
   const [floatInspector, setFloatInspector] = useState(false);
   const [editTool, setEditTool] = useState<ToolId>("select");
   const [workspace, setWorkspace] = useState<WorkspaceId>("editing");
   const [cmdOpen, setCmdOpen] = useState(false);
   const [uiLarge, setUiLarge] = useState(false);
+  const [toolbarDensity, setToolbarDensity] = useState<"s" | "m" | "l">("m");
+  const [dirty, setDirty] = useState(true);
   const [inspSearch, setInspSearch] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [marquee, setMarquee] = useState<{
@@ -213,6 +263,10 @@ export function StudioEditor({
 
   function startPanelResize(which: "bin" | "inspector", clientX0: number) {
     beginPanelResize(which, clientX0, binW, inspectorW, setBinW, setInspectorW);
+  }
+  function onPanelResizerDoubleClick(which: "bin" | "inspector") {
+    if (which === "bin") setBinW(resetPanelWidth("bin"));
+    else setInspectorW(resetPanelWidth("inspector"));
   }
 
   const [tracks, setTracks] = useState<Record<TrackId, TrackChrome>>(() => {
@@ -283,6 +337,7 @@ export function StudioEditor({
     setWorkspace,
     setBinW,
     setInspectorW,
+    setTimelineHVh,
     setFloatBin,
     setFloatInspector,
     setExpanded,
@@ -425,6 +480,7 @@ export function StudioEditor({
 
   useEffect(() => {
     dirtyRef.current = true;
+    setDirty(true);
   }, [clips, texts, music, musicTracks, markers, aspect, tracks, freeV1, growthPack, brandKit, calendarEvents, aiSuggestions]);
 
   const saveProjectState = useCallback(async (silent = false) => {
@@ -455,6 +511,7 @@ export function StudioEditor({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Save failed");
       dirtyRef.current = false;
+      setDirty(false);
       setLastSavedAt(data.updatedAt || new Date().toISOString());
       if (!silent) pushToast("Project saved", "success");
     } catch (err) {
@@ -993,6 +1050,7 @@ export function StudioEditor({
     applyAiMarkers,
     runAiSearch,
     runAiReframe,
+    runAiDelogo,
   } = useStudioAi({
     projectId: project.id,
     projectName: project.name || "Clip",
@@ -1272,6 +1330,7 @@ export function StudioEditor({
     refreshExportJobs,
     runAiAnalyze,
     runAiReframe,
+    runAiDelogo,
     pushToast,
   });
 
@@ -1370,6 +1429,7 @@ export function StudioEditor({
     setSidebarTab,
     runAiAnalyze,
     runAiReframe,
+    runAiDelogo,
     suggestAndInsertBroll,
     createShareLink,
     exportThumbnail,
@@ -1472,6 +1532,7 @@ export function StudioEditor({
     setAllKeyframeEase,
     addEffect,
     updateEffect,
+    setEffects,
     moveEffect,
     removeEffect,
     detachClipAudio,
@@ -1542,6 +1603,7 @@ export function StudioEditor({
           canExport={clips.length > 0}
           onOpenKeymap={() => setShowKeymap(true)}
           onOpenManual={() => setShowManual(true)}
+          onOpenGrowth={() => setShowGrowthHub(true)}
           floatBin={floatBin}
           floatInspector={floatInspector}
           onToggleFloatBin={() => setFloatBin((v) => !v)}
@@ -1559,13 +1621,12 @@ export function StudioEditor({
           onToggleMagnetic={() => setMagnetic((m) => !m)}
           rippleEnabled={rippleEnabled}
           onToggleRipple={() => setRippleEnabled((r) => !r)}
-        />
-
-        <StudioToolbar
-          tool={editTool}
-          onSetTool={setEditTool}
-          selectedId={selectedId}
-          onDuplicate={() => selectedId && duplicateClip(selectedId)}
+          saving={saving}
+          lastSavedAt={lastSavedAt}
+          dirty={dirty}
+          toolbarDensity={toolbarDensity}
+          onToolbarDensity={setToolbarDensity}
+          onApplyWorkspace={applyWorkspace}
         />
 
         <div
@@ -1573,10 +1634,10 @@ export function StudioEditor({
           style={
             {
               ["--cc-bin" as string]: sidebarCollapsed
-                ? "78px"
+                ? "112px"
                 : `${binW}px`,
               ["--cc-insp" as string]: inspectorCollapsed
-                ? "40px"
+                ? "112px"
                 : `${inspectorW}px`,
             } as CSSProperties
           }
@@ -1623,7 +1684,7 @@ export function StudioEditor({
                     setSelectedIds([clip.id]);
                   }
                   addEffect(clip.id, kind);
-                  setTab("effects");
+                  setTab("clip");
                 }}
               />
             )}
@@ -1731,6 +1792,7 @@ export function StudioEditor({
                 onHookFix={applyHookFix}
                 onOpenGrowthHub={() => setShowGrowthHub(true)}
                 onReframe={() => void runAiReframe()}
+                onDelogo={() => void runAiDelogo()}
                 onSearchSeek={(q, mode) => void runAiSearch(q, mode ?? "semantic")}
                 onApplyEditPrompt={applyAiEditPrompt}
                 onAutoCaptions={() => void autoCaptionsFromSpeech()}
@@ -1768,24 +1830,6 @@ export function StudioEditor({
                 onSuggestBroll={suggestAndInsertBroll}
               />
             )}
-            {sidebarTab === "cleanup" && (
-              <GrowthShellPanel
-                mode="cleanup"
-                cleanupItems={cleanupItems}
-                onSeek={seek}
-                onApplyCleanup={applyCleanupItem}
-                onApplyCleanupAll={applyCleanupAll}
-                denoiseLevel={cleanupDenoiseLevel}
-                onDenoiseChange={(level) => applyDenoiseToMainClips(level, { silent: true })}
-                onDenoiseDialogue={applyDenoiseDialogue}
-                stabilizeLevel={cleanupStabilizeLevel}
-                onStabilizeChange={(level) => applyStabilizeToMainClips(level, { silent: true })}
-                onStabilizeMain={applyStabilizeMain}
-              />
-            )}
-            {sidebarTab === "motion" && (
-              <GrowthShellPanel mode="motion" onInsertShell={insertShellCard} />
-            )}
             {sidebarTab === "publish" && (
               <GrowthShellPanel
                 mode="publish"
@@ -1797,8 +1841,9 @@ export function StudioEditor({
           {!sidebarCollapsed ? (
             <div
               className="panel-resizer"
-              title="Drag to resize library"
+              title="Drag to resize · double-click to reset"
               onPointerDown={(e) => startPanelResize("bin", e.clientX)}
+              onDoubleClick={() => onPanelResizerDoubleClick("bin")}
             />
           ) : (
             <div className="panel-resizer inert" aria-hidden />
@@ -1886,8 +1931,9 @@ export function StudioEditor({
           {!inspectorCollapsed ? (
             <div
               className="panel-resizer"
-              title="Drag to resize inspector"
+              title="Drag to resize · double-click to reset"
               onPointerDown={(e) => startPanelResize("inspector", e.clientX)}
+              onDoubleClick={() => onPanelResizerDoubleClick("inspector")}
             />
           ) : (
             <div className="panel-resizer inert" aria-hidden />
@@ -1921,11 +1967,21 @@ export function StudioEditor({
           </StudioInspector>
         </div>
 
+        <div
+          className="timeline-resizer"
+          title="Drag to resize timeline · double-click to reset"
+          onPointerDown={(e) =>
+            startTimelineResize(e.clientY, timelineHVh, setTimelineHVh)
+          }
+          onDoubleClick={() => setTimelineHVh(DEFAULT_TIMELINE_H)}
+        />
+
         {/* Timeline */}
         <StudioTimeline
           ctx={{
             expanded,
             setExpanded,
+            timelineHVh,
             total,
             scrubTotal,
             current,
@@ -1989,25 +2045,15 @@ export function StudioEditor({
             selectedTextId,
             setSelectedTextId,
             setTab: (t) => {
-              if (t === "text") {
-                setTab("text");
-                return;
-              }
               if (t === "transitions") {
-                setTab("transitions");
+                setSidebarTab("transitions");
+                setTab("clip");
                 return;
               }
-              if (t === "fx") {
-                setSidebarTab("effects");
-                setTab("effects");
-                return;
-              }
-              if (t === "effects") {
-                setTab("color");
-                return;
-              }
-              if (t === "audio") {
-                setTab("audio");
+              if (t === "fx" || t === "effects" || t === "animation") {
+                if (t === "animation") setSidebarTab("animations");
+                else setSidebarTab("effects");
+                setTab("clip");
                 return;
               }
               setTab(t);

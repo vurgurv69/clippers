@@ -331,15 +331,15 @@ function buildAttempts(
   const cookies = cookiesArgs();
 
   if (platform === "tiktok") {
-    // Helpers (tikwm) run first in downloadVideo(); yt-dlp is a fallback.
+    // Helpers (tikwm via Node) run first in downloadVideo(); yt-dlp is last resort.
+    // Prefer IPv4 — Windows curl_cffi often resets on TikTok TLS.
     return [
       {
-        label: "tiktok impersonate",
+        label: "tiktok ipv4",
         args: [
           ...base,
           ...cookies,
-          "--impersonate",
-          "chrome",
+          "--force-ipv4",
           "-f",
           "b/bv*+ba/best",
           url,
@@ -347,7 +347,7 @@ function buildAttempts(
       },
       {
         label: "tiktok best",
-        args: [...base, ...cookies, "-f", "b/best", url],
+        args: [...base, ...cookies, "--force-ipv4", "-f", "b/best", url],
       },
     ];
   }

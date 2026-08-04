@@ -63,8 +63,12 @@ export function StudioMediaBin({
   onGenerateProxiesBatch,
   onDelete,
 }: Props) {
+  void onReplace;
+  void onGenerateProxy;
+  void onGenerateProxiesBatch;
   const [folder, setFolder] = useState<FolderId>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"grid" | "list" | "compact">("grid");
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -189,22 +193,32 @@ export function StudioMediaBin({
       )}
 
       <div className="bin-mode-row cc-media-actions">
-        <button type="button" className="btn tiny ghost" onClick={onCleanupUnused} title="Remove unused">
-          Clean unused
+        <span className="cc-seg cc-view-modes" role="group" aria-label="View mode">
+          {(
+            [
+              ["grid", "▦"],
+              ["list", "☰"],
+              ["compact", "▦▦"],
+            ] as const
+          ).map(([id, glyph]) => (
+            <button
+              key={id}
+              type="button"
+              className={viewMode === id ? "on" : undefined}
+              onClick={() => setViewMode(id)}
+              title={id === "grid" ? "Grid" : id === "list" ? "List" : "Compact"}
+              aria-label={id}
+            >
+              {glyph}
+            </button>
+          ))}
+        </span>
+        <button type="button" className="btn tiny ghost" onClick={onCleanupUnused} title="Remove unused media">
+          Clean
         </button>
-        {onGenerateProxiesBatch && (
-          <button
-            type="button"
-            className="btn tiny ghost"
-            onClick={onGenerateProxiesBatch}
-            title="Build low-res proxies for all video/image"
-          >
-            Proxies all
-          </button>
-        )}
       </div>
 
-      <div className="bin-grid" role="list" aria-label="Media library">
+      <div className={`bin-grid mode-${viewMode}`} role="list" aria-label="Media library">
         {visible.map((a) => (
           <div key={a.id} className="bin-item-wrap" role="listitem">
             <button
@@ -243,7 +257,7 @@ export function StudioMediaBin({
                 <em className="cc-asset-tags">{a.tags.slice(0, 3).join(" · ")}</em>
               )}
             </button>
-            <div className="bin-actions">
+            <div className="bin-actions bin-actions-clean">
               <button
                 className={favAssets.includes(a.id) ? "th-btn on" : "th-btn"}
                 title="Favorite"
@@ -252,36 +266,10 @@ export function StudioMediaBin({
                 ★
               </button>
               <button className="th-btn" title="Rename" onClick={() => onRename(a)}>
-                Rename
+                ✎
               </button>
-              <label className="th-btn" title="Replace">
-                Replace
-                <input
-                  type="file"
-                  hidden
-                  accept={
-                    a.kind === "audio"
-                      ? "audio/*"
-                      : a.kind === "lut"
-                        ? ".cube"
-                        : a.kind === "image"
-                          ? "image/*"
-                          : "video/*"
-                  }
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) onReplace(a, f);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-              {onGenerateProxy && (a.kind === "video" || a.kind === "image") && (
-                <button className="th-btn" title="Proxy" onClick={() => onGenerateProxy(a)}>
-                  Proxy
-                </button>
-              )}
               <button className="th-btn" title="Remove from library" onClick={() => onDelete(a)}>
-                Remove
+                ✕
               </button>
             </div>
           </div>

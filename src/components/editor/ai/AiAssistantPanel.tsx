@@ -22,6 +22,8 @@ type Props = {
   onHookFix: (id: string) => void;
   onOpenGrowthHub: () => void;
   onReframe?: () => void;
+  /** Scan frames for burned-in names / logos and cover them. */
+  onDelogo?: () => void;
   onSearchSeek?: (query: string, mode?: "keyword" | "semantic") => void;
   /** Natural-language look / transform edit for the selected (or all) clips. */
   onApplyEditPrompt?: (prompt: string, scope: "selected" | "all") => void;
@@ -50,6 +52,7 @@ export function AiAssistantPanel({
   onHookFix,
   onOpenGrowthHub,
   onReframe,
+  onDelogo,
   onSearchSeek,
   onApplyEditPrompt,
   onAutoCaptions,
@@ -251,6 +254,11 @@ export function AiAssistantPanel({
         {onReframe && (
           <button type="button" className="btn" onClick={onReframe}>
             AI Reframe
+          </button>
+        )}
+        {onDelogo && (
+          <button type="button" className="btn" onClick={onDelogo}>
+            AI remove names
           </button>
         )}
       </div>

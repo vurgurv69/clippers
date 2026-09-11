@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { StudioSlider as Slider } from "@/components/editor/StudioSlider";
 import { PanelBlock, inspMatch } from "@/components/editor/InspSection";
+import { ColorPickerPopover } from "@/components/ui/ColorPickerPopover";
 import {
   TEXT_FONTS,
   type ProjectAsset,
@@ -285,10 +286,10 @@ export function TextPanel({ ctx }: { ctx: TextPanelCtx }) {
 
             <label className="field row text-color-row">
               <span className="slider-title">Color</span>
-              <input
-                type="color"
+              <ColorPickerPopover
+                label="Text color"
                 value={selectedText.color}
-                onChange={(e) => patchText(selectedText.id, { color: e.target.value })}
+                onChange={(color) => patchText(selectedText.id, { color })}
               />
             </label>
 

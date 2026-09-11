@@ -38,7 +38,14 @@ export type AudioTrack = {
   originalVolume: number; // 0..2 for the clip's own audio
 };
 
-export type TransitionKind = "none" | "fade" | "fadeblack" | "fadewhite";
+export type TransitionKind =
+  | "none"
+  | "fade"
+  | "fadeblack"
+  | "fadewhite"
+  | "flashburn"
+  | "whip"
+  | "glitch";
 
 export type EditSpec = {
   segments: EditSegment[];

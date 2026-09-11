@@ -65,6 +65,7 @@ function forkOnce(args: RenderArgs): Promise<{ outName: string }> {
           stdio: ["ignore", "inherit", "inherit", "ipc"],
           env: process.env,
           windowsHide: true,
+          shell: false,
         },
       );
     } catch (err) {

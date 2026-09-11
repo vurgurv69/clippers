@@ -368,6 +368,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
 
   const [audioExpanded, setAudioExpanded] = useState(false);
   const [trEditId, setTrEditId] = useState<string | null>(null);
+  const [trimmingId, setTrimmingId] = useState<string | null>(null);
 
   const laneH = (
     id: "video" | "music" | "text" | "overlay" | "overlay2",
@@ -508,7 +509,12 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
   ) => {
     e.stopPropagation();
     if (tool === "blade" || tool === "hand" || tool === "zoom" || tool === "slip") return;
-    dragHandle(e.clientX, (d) => trimClipEdge(c.id, edge, d, trimMode()));
+    setTrimmingId(c.id);
+    dragHandle(
+      e.clientX,
+      (d) => trimClipEdge(c.id, edge, d, trimMode()),
+      () => setTrimmingId(null),
+    );
   };
 
   return (
@@ -848,7 +854,7 @@ export function StudioTimeline({ ctx }: { ctx: TimelineCtx }) {
                         return (
                           <div
                             key={c.id}
-                            className={`clip-block${isOn ? " on" : ""}${c.adjustment ? " adjustment" : ""}${c.compound ? " compound" : ""}`}
+                            className={`clip-block${isOn ? " on" : ""}${c.adjustment ? " adjustment" : ""}${c.compound ? " compound" : ""}${trimmingId === c.id ? " trimming" : ""}`}
                             style={{
                               left,
                               width,

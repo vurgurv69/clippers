@@ -51,6 +51,8 @@ type Props = {
   toolbarDensity?: "s" | "m" | "l";
   onToolbarDensity?: (d: "s" | "m" | "l") => void;
   onApplyWorkspace?: (w: WorkspaceId) => void;
+  simpleMode?: boolean;
+  onToggleSimpleMode?: () => void;
 };
 
 /** Studio 2.0 header: Left brand · Center undo/save · Right actions */
@@ -93,6 +95,8 @@ export function StudioTopBar({
   toolbarDensity = "m",
   onToolbarDensity,
   onApplyWorkspace,
+  simpleMode = false,
+  onToggleSimpleMode,
 }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
@@ -236,6 +240,19 @@ export function StudioTopBar({
         )}
 
         <p className="settings-heading">Layout</p>
+        {onToggleSimpleMode && (
+          <label className="cc-set-row">
+            <span>Simple mode</span>
+            <button
+              type="button"
+              className={simpleMode ? "cc-set-toggle on" : "cc-set-toggle"}
+              onClick={onToggleSimpleMode}
+              title="Hide dense inspector / rail chrome for beginners"
+            >
+              {simpleMode ? "On" : "Off"}
+            </button>
+          </label>
+        )}
         {onToggleFloatBin && (
           <label className="cc-set-row">
             <span>Media panel</span>
@@ -375,6 +392,22 @@ export function StudioTopBar({
 
       <div className="top-right">
         <div className="top-actions">
+          {onToggleSimpleMode && (
+            <button
+              type="button"
+              className={simpleMode ? "btn cc-top-btn on" : "btn cc-top-btn"}
+              onClick={onToggleSimpleMode}
+              title={
+                simpleMode
+                  ? "Exit Simple mode — show full inspector & media rail"
+                  : "Simple mode — hide dense panels (Ctrl+K → Simple mode)"
+              }
+              aria-pressed={simpleMode}
+            >
+              {simpleMode ? "Simple ✓" : "Simple"}
+            </button>
+          )}
+
           <button
             type="button"
             className="btn cc-theme-btn cc-top-btn"

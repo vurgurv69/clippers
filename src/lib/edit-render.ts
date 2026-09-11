@@ -159,70 +159,23 @@ export async function renderEdit(opts: {
   const total = segs.reduce((n, s) => n + (s.end - s.start), 0);
 
   const trans = spec.cutTransition || "none";
-  const cutD = clamp(spec.cutTransitionDuration ?? 0.4, 0, 2);
-  const useCutFade = trans !== "none" && cutD > 0 && segs.length > 1;
-  const fadeColor = trans === "fadewhite" ? "white" : "black";
+  const cutDRaw = clamp(spec.cutTransitionDuration ?? 0.4, 0, 2);
+  const useCutFade = trans !== "none" && cutDRaw > 0 && segs.length > 1;
+  const fadeColor =
+    trans === "fadewhite" || trans === "flashburn" ? "white" : "black";
+  const specialty = trans === "whip" || trans === "glitch";
 
   const fadeIn = clamp(spec.fadeIn ?? 0, 0, Math.min(5, total));
   const fadeOut = clamp(spec.fadeOut ?? 0, 0, Math.min(5, total));
 
-  // --- video chain ---
-  const vParts: string[] = [];
-  const vLabels: string[] = [];
-  segs.forEach((s, i) => {
-    const len = s.end - s.start;
-    let chain = `[0:v]trim=start=${s.start.toFixed(3)}:end=${s.end.toFixed(3)},setpts=PTS-STARTPTS`;
-    if (useCutFade) {
-      if (i > 0) chain += `,fade=t=in:st=0:d=${cutD}:color=${fadeColor}`;
-      if (i < segs.length - 1)
-        chain += `,fade=t=out:st=${Math.max(0, len - cutD).toFixed(3)}:d=${cutD}:color=${fadeColor}`;
-    }
-    const label = `v${i}`;
-    vParts.push(`${chain}[${label}]`);
-    vLabels.push(`[${label}]`);
-  });
-
-  let vTail: string;
-  if (segs.length > 1) {
-    vParts.push(`${vLabels.join("")}concat=n=${segs.length}:v=1:a=0[vcat]`);
-    vTail = "vcat";
-  } else {
-    vTail = vLabels[0].replace(/[[\]]/g, "");
-  }
-
-  const b = clamp(spec.color?.brightness ?? 1, 0, 2) - 1; // eq additive
-  const c = clamp(spec.color?.contrast ?? 1, 0, 2);
-  const sat = clamp(spec.color?.saturation ?? 1, 0, 3);
-  vParts.push(
-    `[${vTail}]eq=brightness=${b.toFixed(3)}:contrast=${c.toFixed(3)}:saturation=${sat.toFixed(3)}[veq]`,
-  );
-
-  let curV = "veq";
   const texts = (spec.texts || []).filter((t) => t.text.trim());
   let assName: string | null = null;
   if (texts.length) {
     assName = `${clipId}-overlay.ass`;
     const ass = buildOverlayAss(texts, info, segs, total);
     await fs.writeFile(path.join(clipsDir, assName), `\ufeff${ass}`, "utf8");
-    vParts.push(`[${curV}]ass=${assName}[vtxt]`);
-    curV = "vtxt";
   }
 
-  const vFades: string[] = [];
-  if (fadeIn > 0) vFades.push(`fade=t=in:st=0:d=${fadeIn.toFixed(3)}`);
-  if (fadeOut > 0)
-    vFades.push(
-      `fade=t=out:st=${Math.max(0, total - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
-    );
-  if (vFades.length) {
-    vParts.push(`[${curV}]${vFades.join(",")}[vout]`);
-    curV = "vout";
-  } else {
-    vParts.push(`[${curV}]null[vout]`);
-    curV = "vout";
-  }
-
-  // --- audio chain ---
   const musicPath = spec.audio?.filename
     ? path.join(jobDir(jobId), "edit-assets", spec.audio.filename)
     : null;
@@ -236,88 +189,169 @@ export async function renderEdit(opts: {
     }
   }
 
-  const aParts: string[] = [];
-  let audioOut: string | null = null;
-  const origVol = clamp(spec.audio?.originalVolume ?? 1, 0, 2);
-  const musicVol = clamp(spec.audio?.volume ?? 1, 0, 2);
-
-  if (info.hasAudio && origVol > 0) {
+  function buildGraph(withCutFades: boolean) {
+    const vParts: string[] = [];
+    const vLabels: string[] = [];
     segs.forEach((s, i) => {
-      aParts.push(
-        `[0:a]atrim=start=${s.start.toFixed(3)}:end=${s.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`,
-      );
+      const len = s.end - s.start;
+      const cutD = Math.min(cutDRaw, Math.max(0.05, len * 0.45));
+      let chain = `[0:v]trim=start=${s.start.toFixed(3)}:end=${s.end.toFixed(3)},setpts=PTS-STARTPTS,fps=30,format=yuv420p`;
+      if (withCutFades && useCutFade) {
+        if (specialty) {
+          // Whip / digital glitch edge FX on cut boundaries.
+          if (i < segs.length - 1) {
+            const tOut = Math.max(0, len - cutD);
+            if (trans === "whip") {
+              chain += `,boxblur=luma_radius=14:luma_power=2:enable='gte(t\\,${tOut.toFixed(3)})'`;
+            } else {
+              chain += `,rgbshift=rh=10:bh=-8:enable='gte(t\\,${tOut.toFixed(3)})'`;
+              chain += `,noise=alls=22:allf=t+u:enable='gte(t\\,${tOut.toFixed(3)})'`;
+            }
+          }
+          if (i > 0) {
+            if (trans === "whip") {
+              chain += `,boxblur=luma_radius=14:luma_power=2:enable='lt(t\\,${cutD.toFixed(3)})'`;
+            } else {
+              chain += `,rgbshift=rh=-8:bh=10:enable='lt(t\\,${cutD.toFixed(3)})'`;
+            }
+          }
+          if (i > 0) chain += `,fade=t=in:st=0:d=${cutD.toFixed(3)}:color=${fadeColor}`;
+          if (i < segs.length - 1)
+            chain += `,fade=t=out:st=${Math.max(0, len - cutD).toFixed(3)}:d=${cutD.toFixed(3)}:color=${fadeColor}`;
+        } else {
+          if (i > 0) chain += `,fade=t=in:st=0:d=${cutD.toFixed(3)}:color=${fadeColor}`;
+          if (i < segs.length - 1)
+            chain += `,fade=t=out:st=${Math.max(0, len - cutD).toFixed(3)}:d=${cutD.toFixed(3)}:color=${fadeColor}`;
+        }
+      }
+      const label = `v${i}`;
+      vParts.push(`${chain}[${label}]`);
+      vLabels.push(`[${label}]`);
     });
+
+    let vTail: string;
     if (segs.length > 1) {
-      aParts.push(
-        `${segs.map((_, i) => `[a${i}]`).join("")}concat=n=${segs.length}:v=0:a=1[acat]`,
-      );
-      aParts.push(`[acat]volume=${origVol.toFixed(3)}[aorig]`);
+      vParts.push(`${vLabels.join("")}concat=n=${segs.length}:v=1:a=0[vcat]`);
+      vTail = "vcat";
     } else {
-      aParts.push(`[a0]volume=${origVol.toFixed(3)}[aorig]`);
+      vTail = vLabels[0].replace(/[[\]]/g, "");
     }
-    audioOut = "aorig";
+
+    const b = clamp(spec.color?.brightness ?? 1, 0, 2) - 1;
+    const c = clamp(spec.color?.contrast ?? 1, 0, 2);
+    const sat = clamp(spec.color?.saturation ?? 1, 0, 3);
+    vParts.push(
+      `[${vTail}]eq=brightness=${b.toFixed(3)}:contrast=${c.toFixed(3)}:saturation=${sat.toFixed(3)}[veq]`,
+    );
+
+    let curV = "veq";
+    if (assName) {
+      vParts.push(`[${curV}]ass=${assName}[vtxt]`);
+      curV = "vtxt";
+    }
+
+    const vFades: string[] = [];
+    if (fadeIn > 0) vFades.push(`fade=t=in:st=0:d=${fadeIn.toFixed(3)}`);
+    if (fadeOut > 0)
+      vFades.push(
+        `fade=t=out:st=${Math.max(0, total - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
+      );
+    if (vFades.length) {
+      vParts.push(`[${curV}]${vFades.join(",")}[vout]`);
+    } else {
+      vParts.push(`[${curV}]null[vout]`);
+    }
+
+    const aParts: string[] = [];
+    let audioOut: string | null = null;
+    const origVol = clamp(spec.audio?.originalVolume ?? 1, 0, 2);
+    const musicVol = clamp(spec.audio?.volume ?? 1, 0, 2);
+
+    if (info.hasAudio && origVol > 0) {
+      segs.forEach((s, i) => {
+        aParts.push(
+          `[0:a]atrim=start=${s.start.toFixed(3)}:end=${s.end.toFixed(3)},asetpts=PTS-STARTPTS[a${i}]`,
+        );
+      });
+      if (segs.length > 1) {
+        aParts.push(
+          `${segs.map((_, i) => `[a${i}]`).join("")}concat=n=${segs.length}:v=0:a=1[acat]`,
+        );
+        aParts.push(`[acat]volume=${origVol.toFixed(3)}[aorig]`);
+      } else {
+        aParts.push(`[a0]volume=${origVol.toFixed(3)}[aorig]`);
+      }
+      audioOut = "aorig";
+    }
+
+    if (hasMusic) {
+      const musicIdx = 1;
+      aParts.push(
+        `[${musicIdx}:a]atrim=start=0:end=${total.toFixed(3)},asetpts=PTS-STARTPTS,volume=${musicVol.toFixed(3)}[amus]`,
+      );
+      if (audioOut) {
+        aParts.push(
+          `[${audioOut}][amus]amix=inputs=2:duration=first:dropout_transition=0[amixed]`,
+        );
+        audioOut = "amixed";
+      } else {
+        audioOut = "amus";
+      }
+    }
+
+    if (audioOut) {
+      const aFades: string[] = [];
+      if (fadeIn > 0) aFades.push(`afade=t=in:st=0:d=${fadeIn.toFixed(3)}`);
+      if (fadeOut > 0)
+        aFades.push(
+          `afade=t=out:st=${Math.max(0, total - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
+        );
+      if (aFades.length) {
+        aParts.push(`[${audioOut}]${aFades.join(",")}[aout]`);
+        audioOut = "aout";
+      }
+    }
+
+    return { filterComplex: [...vParts, ...aParts].join(";"), audioOut };
   }
 
   const inputs: string[] = ["-i", srcPath];
-  if (hasMusic) {
-    inputs.push("-i", musicPath!);
-    const musicIdx = 1;
-    aParts.push(
-      `[${musicIdx}:a]atrim=start=0:end=${total.toFixed(3)},asetpts=PTS-STARTPTS,volume=${musicVol.toFixed(3)}[amus]`,
-    );
-    if (audioOut) {
-      aParts.push(`[${audioOut}][amus]amix=inputs=2:duration=first:dropout_transition=0[amixed]`);
-      audioOut = "amixed";
-    } else {
-      audioOut = "amus";
-    }
-  }
-
-  if (audioOut) {
-    const aFades: string[] = [];
-    if (fadeIn > 0) aFades.push(`afade=t=in:st=0:d=${fadeIn.toFixed(3)}`);
-    if (fadeOut > 0)
-      aFades.push(
-        `afade=t=out:st=${Math.max(0, total - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
-      );
-    if (aFades.length) {
-      aParts.push(`[${audioOut}]${aFades.join(",")}[aout]`);
-      audioOut = "aout";
-    }
-  }
-
-  const filterComplex = [...vParts, ...aParts].join(";");
+  if (hasMusic) inputs.push("-i", musicPath!);
 
   const outName = `${clipId}-edit-${Date.now()}.mp4`;
-  const args = [
-    "-y",
-    ...inputs,
-    "-filter_complex",
-    filterComplex,
-    "-map",
-    "[vout]",
-  ];
-  if (audioOut) {
-    args.push("-map", `[${audioOut}]`);
-  } else {
-    args.push("-an");
-  }
-  args.push(
-    "-c:v",
-    "libx264",
-    "-preset",
-    "fast",
-    "-crf",
-    "18",
-    "-pix_fmt",
-    "yuv420p",
-    "-movflags",
-    "+faststart",
-  );
-  if (audioOut) args.push("-c:a", "aac", "-b:a", "192k");
-  args.push(outName);
 
-  await runCommand(ffmpegPath(), args, { cwd: clipsDir });
+  async function runEdit(withCutFades: boolean) {
+    const { filterComplex, audioOut } = buildGraph(withCutFades);
+    const args = ["-y", ...inputs, "-filter_complex", filterComplex, "-map", "[vout]"];
+    if (audioOut) args.push("-map", `[${audioOut}]`);
+    else args.push("-an");
+    args.push(
+      "-r",
+      "30",
+      "-vsync",
+      "cfr",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "fast",
+      "-crf",
+      "18",
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+    );
+    if (audioOut) args.push("-c:a", "aac", "-b:a", "192k");
+    args.push(outName);
+    await runCommand(ffmpegPath(), args, { cwd: clipsDir });
+  }
+
+  try {
+    await runEdit(true);
+  } catch {
+    // Cut fades / odd fps → retry as plain concat (standard crossfade-less safe path).
+    await runEdit(false);
+  }
 
   if (assName) {
     try {

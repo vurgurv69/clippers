@@ -5,6 +5,7 @@ import { usePlaybackClock } from "@/hooks/studio/playbackClock";
 import type { MusicTrack, ProjectAsset, TextOverlay, TimelineClip } from "@/lib/editor-types";
 import { TextLayer } from "@/components/editor/TextLayer";
 import { WebGLFxPreview } from "@/components/editor/WebGLFxPreview";
+import { WebCodecsCanvasPreview } from "@/components/editor/WebCodecsCanvasPreview";
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (!ref) return;
@@ -326,11 +327,17 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
     Boolean(
       activeClip &&
         activeAsset?.kind === "video" &&
-        ((activeClip.effects || []).some((f) => f.enabled) ||
+        ((activeClip.effects || []).some((f) => f.enabled && f.kind !== "chromakey") ||
           (activeClip.color.vignette ?? 0) > 0.02 ||
           Math.abs(activeClip.color.hueShift ?? 0) > 0.5 ||
           Boolean(activeClip.color.lut)),
     );
+
+  const wantsChroma = Boolean(
+    activeClip &&
+      activeAsset?.kind === "video" &&
+      (activeClip.effects || []).some((f) => f.enabled && f.kind === "chromakey"),
+  );
 
   const mediaStyle = (() => {
     const baseT = previewTransform(activeClip, activeLocalT);
@@ -585,6 +592,21 @@ export const StudioPreview = forwardRef<HTMLDivElement, Props>(function StudioPr
                     })
                   : null
               }
+            />
+          )}
+          {wantsChroma && videoEl && (
+            <WebCodecsCanvasPreview
+              videoRef={{ current: videoEl }}
+              width={Math.max(2, aspectW)}
+              height={Math.max(2, aspectH)}
+              effects={activeClip?.effects}
+              className="preview-chroma-canvas"
+              style={{
+                position: "absolute",
+                inset: 0,
+                pointerEvents: "none",
+                zIndex: 2,
+              }}
             />
           )}
           {activeAsset?.kind === "image" && (

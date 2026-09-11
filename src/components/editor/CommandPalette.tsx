@@ -89,6 +89,11 @@ export function CommandPalette({ open, onClose, commands }: Props) {
           }}
         />
         <div className="cmd-list" role="listbox">
+          {!q.trim() && (
+            <p className="cmd-hint-banner">
+              Tip: Space play · S split · V select · C blade · Ctrl+K always open · search “simple”
+            </p>
+          )}
           {filtered.map((c, i) => (
             <button
               key={c.id}
@@ -102,9 +107,7 @@ export function CommandPalette({ open, onClose, commands }: Props) {
               <span>
                 {c.label}
                 {c.hint ? (
-                  <span style={{ color: "var(--muted)", marginLeft: 8, fontSize: 11 }}>
-                    {c.hint}
-                  </span>
+                  <span className="cmd-item-hint">{c.hint}</span>
                 ) : null}
               </span>
               {c.shortcut ? <kbd>{c.shortcut}</kbd> : null}

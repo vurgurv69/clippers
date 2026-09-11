@@ -48,7 +48,7 @@ export type CaptionTheme = {
 export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
   "tiktok-clean": {
     id: "tiktok-clean",
-    label: "TikTok Clean",
+    label: "Clean White",
     font: "Arial",
     arabicFont: "Tahoma",
     size: 64,
@@ -65,7 +65,7 @@ export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
   },
   "tiktok-bold": {
     id: "tiktok-bold",
-    label: "TikTok Bold",
+    label: "Bold Pop",
     font: "Arial Black",
     arabicFont: "Tahoma",
     size: 72,
@@ -82,7 +82,7 @@ export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
   },
   hormozi: {
     id: "hormozi",
-    label: "Hormozi",
+    label: "High Impact",
     font: "Impact",
     arabicFont: "Tahoma",
     size: 78,
@@ -201,7 +201,7 @@ export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
   },
   "youtube-shorts": {
     id: "youtube-shorts",
-    label: "YouTube Shorts",
+    label: "Short Form",
     font: "Arial Black",
     arabicFont: "Tahoma",
     size: 66,
@@ -218,7 +218,7 @@ export const CAPTION_THEMES: Record<CaptionThemeId, CaptionTheme> = {
   },
   "instagram-reels": {
     id: "instagram-reels",
-    label: "Instagram Reels",
+    label: "Vertical Soft",
     font: "Arial",
     arabicFont: "Tahoma",
     size: 62,
@@ -418,7 +418,14 @@ export function phraseCaptionBlocks(
     const punctBreak = prev ? /[.!?؟۔]$/.test(prev.word.trim()) : false;
     const softBreak = prev ? /[,،;:]$/.test(prev.word.trim()) : false;
 
+    const speakerChange =
+      prev != null &&
+      w.speakerId != null &&
+      prev.speakerId != null &&
+      w.speakerId !== prev.speakerId;
+
     const shouldBreak =
+      speakerChange ||
       cur.length >= maxW ||
       (cur.length >= minW && (gap > 0.35 || punctBreak)) ||
       (cur.length >= minW + 1 && softBreak && gap > 0.18);

@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { AspectRatio } from "./types";
 import type { Project, ProjectAsset, ProjectSpec } from "./editor-types";
+import { assertSafeResourceId, resolveUnderRoot } from "./safe-id";
 
 const DATA_ROOT = path.join(process.cwd(), ".data");
 
@@ -10,7 +11,8 @@ export function projectsRoot() {
 }
 
 export function projectDir(id: string) {
-  return path.join(projectsRoot(), id);
+  const safe = assertSafeResourceId(id, "projectId");
+  return resolveUnderRoot(projectsRoot(), safe);
 }
 
 export function assetsDir(id: string) {

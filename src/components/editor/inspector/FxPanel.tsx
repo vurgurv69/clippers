@@ -4,6 +4,7 @@ import { useState } from "react";
 import { StudioSlider as Slider } from "@/components/editor/StudioSlider";
 import { BezierEditor } from "@/components/editor/BezierEditor";
 import { ColorWheelsRow, HueColorWheel } from "@/components/editor/ColorWheels";
+import { ColorPickerPopover } from "@/components/ui/ColorPickerPopover";
 import { TransitionChip } from "@/components/editor/TransitionWidgets";
 import {
   EffectPreview,
@@ -179,12 +180,36 @@ export function FxPanel({ ctx }: { ctx: InspectorPanelCtx }) {
                     </div>
                   </>
                 )}
+                {fx.kind === "chromakey" && (
+                  <div className="csc-color-row" style={{ marginTop: 6, marginBottom: 4 }}>
+                    <ColorPickerPopover
+                      label="Key color"
+                      value={fx.keyColor || "#00FF00"}
+                      onChange={(keyColor) =>
+                        updateEffect(selectedClip.id, fx.id, { keyColor })
+                      }
+                    />
+                  </div>
+                )}
+                {fx.kind === "chromakey" && (
+                  <Slider
+                    label={`Edge soft · ${Math.round(fx.keyBlend ?? 20)}`}
+                    min={0}
+                    max={100}
+                    value={fx.keyBlend ?? 20}
+                    onChange={(v) =>
+                      updateEffect(selectedClip.id, fx.id, { keyBlend: v })
+                    }
+                  />
+                )}
                 {def?.hasAmount && (
                   <Slider
                     label={
                       fx.kind === "delogo"
                         ? `Cover size · ${Math.round(fx.amount)}`
-                        : `Amount · ${Math.round(fx.amount)}`
+                        : fx.kind === "chromakey"
+                          ? `Tolerance · ${Math.round(fx.amount)}`
+                          : `Amount · ${Math.round(fx.amount)}`
                     }
                     min={0}
                     max={100}

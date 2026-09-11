@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
+import { apiGate } from "@/lib/api-gate";
 import { ffprobePath, runCommand } from "@/lib/binaries";
 import {
   addAsset,
@@ -9,8 +10,14 @@ import {
   getProject,
   replaceAssetFile,
 } from "@/lib/editor-project";
+import { assertSafeResourceId, PathSafetyError } from "@/lib/safe-id";
 import { smartTagsForAsset } from "@/lib/smart-tags";
 import type { AssetKind, ProjectAsset } from "@/lib/editor-types";
+import {
+  assertUploadSize,
+  assertVideoMagic,
+  UploadValidationError,
+} from "@/lib/upload-validate";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -58,8 +65,17 @@ async function probe(filePath: string) {
 }
 
 export async function POST(request: Request, { params }: Params) {
+  const gated = apiGate(request, {
+    bucket: "editor-asset-upload",
+    capacity: 20,
+    refillPerSec: 0.5,
+    cost: 1,
+  });
+  if (gated) return gated;
+
   try {
     const { id } = await params;
+    assertSafeResourceId(id, "projectId");
     const project = await getProject(id);
     if (!project) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -70,8 +86,19 @@ export async function POST(request: Request, { params }: Params) {
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "No file provided." }, { status: 400 });
     }
-    if (file.size > 800 * 1024 * 1024) {
-      return NextResponse.json({ error: "File too large (max ~800MB)." }, { status: 400 });
+    try {
+      assertUploadSize(file.size);
+    } catch (err) {
+      // Images/audio/LUTs can be smaller than video min — only enforce max for them.
+      if (file.size > 800 * 1024 * 1024) {
+        return NextResponse.json({ error: "File too large (max ~800MB)." }, { status: 400 });
+      }
+      if (err instanceof UploadValidationError && file.size < 50_000) {
+        const extEarly = path.extname(file.name).toLowerCase();
+        if (VIDEO_EXT.has(extEarly)) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+      }
     }
 
     const ext = path.extname(file.name).toLowerCase();
@@ -83,12 +110,23 @@ export async function POST(request: Request, { params }: Params) {
       );
     }
 
+    const buf = Buffer.from(await file.arrayBuffer());
+    if (kind === "video") {
+      try {
+        assertVideoMagic(buf);
+      } catch (err) {
+        const message =
+          err instanceof UploadValidationError ? err.message : "Unrecognized video file";
+        return NextResponse.json({ error: message }, { status: 400 });
+      }
+    }
+
     await fs.mkdir(assetsDir(id), { recursive: true });
     const replaceId = String(form.get("replaceId") || "");
     const assetId = replaceId || crypto.randomUUID();
     const filename = `${assetId}${ext}`;
     const dest = path.join(assetsDir(id), filename);
-    await fs.writeFile(dest, Buffer.from(await file.arrayBuffer()));
+    await fs.writeFile(dest, buf);
 
     if (kind === "lut" || kind === "font") {
       const asset: ProjectAsset = {
@@ -173,6 +211,9 @@ export async function POST(request: Request, { params }: Params) {
 
     return NextResponse.json({ asset });
   } catch (err) {
+    if (err instanceof PathSafetyError || err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     const message = err instanceof Error ? err.message : "Upload failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }

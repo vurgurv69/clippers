@@ -1,51 +1,18 @@
 import { NextResponse } from "next/server";
-import { createJob, listJobs } from "@/lib/jobs";
-import { parseCaptionsEnabled } from "@/lib/captions-flag";
+import { apiGate } from "@/lib/api-gate";
+import { createJob, getJob, listJobs } from "@/lib/jobs";
+import { HINTS, parseJobOptions } from "@/lib/job-options";
 import { runPipeline } from "@/lib/pipeline";
-import type {
-  AspectRatio,
-  CaptionReadMode,
-  CaptionThemeId,
-  DownloadHint,
-  ExportCodec,
-  ExportQuality,
-  LayoutMode,
-  WhisperQuality,
-} from "@/lib/types";
+import type { DownloadHint } from "@/lib/types";
+import { assertSafeMediaUrl, UrlSafetyError } from "@/lib/url-safety";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const ASPECTS: AspectRatio[] = ["9:16", "1:1", "4:5", "16:9"];
-const LAYOUTS: LayoutMode[] = ["auto", "fill", "face-top"];
-const HINTS: DownloadHint[] = [
-  "auto",
-  "tiktok",
-  "instagram",
-  "youtube",
-  "facebook",
-  "x",
-  "twitch",
-  "kick",
-  "vimeo",
-];
-const WHISPER: WhisperQuality[] = ["fast", "balanced", "best"];
-const CAP_MODES: CaptionReadMode[] = ["verbatim", "readable", "minimal"];
-const THEMES: CaptionThemeId[] = [
-  "tiktok-clean",
-  "tiktok-bold",
-  "hormozi",
-  "podcast",
-  "gaming",
-  "minimal",
-  "cinematic",
-  "luxury",
-  "neon",
-  "youtube-shorts",
-  "instagram-reels",
-];
-const EXPORT_Q: ExportQuality[] = ["high", "very-high", "maximum"];
-const CODECS: ExportCodec[] = ["h264", "hevc", "av1", "vp9"];
+// Kick Whisper singleton warm on first jobs traffic (backup for instrumentation).
+void import("@/lib/whisper")
+  .then((m) => m.warmWhisper("fast"))
+  .catch(() => undefined);
 
 const HINT_HOST: Partial<Record<DownloadHint, (host: string) => boolean>> = {
   tiktok: (h) => h.includes("tiktok"),
@@ -60,8 +27,23 @@ const HINT_HOST: Partial<Record<DownloadHint, (host: string) => boolean>> = {
     h.includes("youtube.com") || h.includes("youtu.be") || h.includes("youtube-nocookie.com"),
 };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const gated = apiGate(request, {
+    bucket: "jobs-poll",
+    capacity: 60,
+    refillPerSec: 2,
+  });
+  if (gated) return gated;
+
   try {
+    const id = new URL(request.url).searchParams.get("id")?.trim();
+    if (id) {
+      const job = await getJob(id);
+      if (!job) {
+        return NextResponse.json({ error: "Job not found" }, { status: 404 });
+      }
+      return NextResponse.json({ job });
+    }
     const jobs = await listJobs(30);
     return NextResponse.json({
       jobs: jobs.map((j) => ({
@@ -83,67 +65,38 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const gated = apiGate(request, {
+    bucket: "jobs-post",
+    capacity: 10,
+    refillPerSec: 0.25,
+    cost: 2,
+  });
+  if (gated) return gated;
+
   try {
-    const body = (await request.json()) as {
+    const body = (await request.json()) as Record<string, unknown> & {
       url?: string;
-      aspectRatio?: string;
-      layoutMode?: string;
-      captionsEnabled?: unknown;
-      downloadHint?: string;
-      whisperQuality?: string;
-      captionTheme?: string;
-      captionReadMode?: string;
-      captionEmojis?: unknown;
-      exportQuality?: string;
-      exportCodec?: string;
-      preferHwEncode?: unknown;
     };
     const url = body.url?.trim();
     if (!url) {
       return NextResponse.json({ error: "Paste a video link first." }, { status: 400 });
     }
 
+    let safeUrl: URL;
     try {
-      const parsed = new URL(url);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
-        throw new Error("bad protocol");
-      }
-    } catch {
-      return NextResponse.json({ error: "That doesn't look like a valid URL." }, { status: 400 });
+      safeUrl = await assertSafeMediaUrl(url);
+    } catch (err) {
+      const message =
+        err instanceof UrlSafetyError ? err.message : "That doesn't look like a valid URL.";
+      return NextResponse.json({ error: message }, { status: 400 });
     }
 
-    const aspectRatio = ASPECTS.includes(body.aspectRatio as AspectRatio)
-      ? (body.aspectRatio as AspectRatio)
-      : "9:16";
-    const layoutMode = LAYOUTS.includes(body.layoutMode as LayoutMode)
-      ? (body.layoutMode as LayoutMode)
-      : "auto";
-    const captionsEnabled = parseCaptionsEnabled(body.captionsEnabled, true);
-    const downloadHint = HINTS.includes(body.downloadHint as DownloadHint)
-      ? (body.downloadHint as DownloadHint)
-      : "auto";
-    const whisperQuality = WHISPER.includes(body.whisperQuality as WhisperQuality)
-      ? (body.whisperQuality as WhisperQuality)
-      : "fast";
-    const captionTheme = THEMES.includes(body.captionTheme as CaptionThemeId)
-      ? (body.captionTheme as CaptionThemeId)
-      : "tiktok-bold";
-    const captionReadMode = CAP_MODES.includes(body.captionReadMode as CaptionReadMode)
-      ? (body.captionReadMode as CaptionReadMode)
-      : "readable";
-    const exportQuality = EXPORT_Q.includes(body.exportQuality as ExportQuality)
-      ? (body.exportQuality as ExportQuality)
-      : "very-high";
-    const exportCodec = CODECS.includes(body.exportCodec as ExportCodec)
-      ? (body.exportCodec as ExportCodec)
-      : "h264";
-    const preferHwEncode =
-      body.preferHwEncode !== false && body.preferHwEncode !== "false";
-    const captionEmojis = body.captionEmojis !== false && body.captionEmojis !== "false";
+    const opts = parseJobOptions(body);
+    const downloadHint = HINTS.includes(opts.downloadHint) ? opts.downloadHint : "auto";
 
     const hostCheck = HINT_HOST[downloadHint];
     if (hostCheck) {
-      const host = new URL(url).hostname.toLowerCase();
+      const host = safeUrl.hostname.toLowerCase();
       if (!hostCheck(host)) {
         const label =
           downloadHint === "x"
@@ -156,20 +109,34 @@ export async function POST(request: Request) {
       }
     }
 
-    const job = await createJob(url, {
-      aspectRatio,
-      layoutMode,
-      captionsEnabled,
+    const canonical = safeUrl.toString();
+    const job = await createJob(canonical, {
+      aspectRatio: opts.aspectRatio,
+      layoutMode: opts.layoutMode,
+      captionsEnabled: opts.captionsEnabled,
       downloadHint,
-      whisperQuality,
-      captionTheme,
-      captionReadMode,
-      captionEmojis,
-      exportQuality,
-      exportCodec,
-      preferHwEncode,
+      whisperQuality: opts.whisperQuality,
+      captionTheme: opts.captionTheme,
+      captionReadMode: opts.captionReadMode,
+      captionEmojis: opts.captionEmojis,
+      exportQuality: opts.clipMode === "social" ? "maximum" : opts.exportQuality,
+      exportCodec: opts.clipMode === "social" ? "h264" : opts.exportCodec,
+      preferHwEncode: opts.preferHwEncode,
+      clipCount: opts.clipMode === "social" ? 1 : opts.clipCount,
+      manualStartTime: opts.manualStartTime,
+      manualEndTime: opts.manualEndTime,
+      captionPrimary: opts.captionPrimary,
+      captionHighlight: opts.captionHighlight,
+      captionFont: opts.captionFont,
+      captionAlign: opts.captionAlign,
+      captionFontSize: opts.captionFontSize,
+      captionOutline: opts.captionOutline,
+      captionBox: opts.captionBox,
+      removeWatermark: opts.clipMode === "social" ? true : opts.removeWatermark,
+      clipMode: opts.clipMode,
+      stripBurnIn: opts.stripBurnIn,
     });
-    void runPipeline(job.id, url);
+    void runPipeline(job.id, canonical);
 
     return NextResponse.json({ job });
   } catch (err) {

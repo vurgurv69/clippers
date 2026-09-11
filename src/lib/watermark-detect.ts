@@ -6,7 +6,7 @@ import fs from "fs/promises";
 import path from "path";
 import sharp from "sharp";
 import { ffmpegPath, runCommand } from "@/lib/binaries";
-import { hasOpenAiKey, llmVision, parseLlmJson } from "@/lib/llm";
+import { hasLlmKey, llmVision, parseLlmJson } from "@/lib/llm";
 import type { DelogoRegion } from "@/lib/editor-types";
 import { jobDir } from "@/lib/jobs";
 
@@ -197,7 +197,7 @@ async function visionMarks(framePaths: string[]): Promise<{
   usedLlm: boolean;
   raw?: string;
 }> {
-  if (!hasOpenAiKey()) return { regions: [], usedLlm: false };
+  if (!hasLlmKey()) return { regions: [], usedLlm: false };
 
   const images: string[] = [];
   for (const fp of framePaths.slice(0, 5)) {
@@ -312,9 +312,9 @@ export async function detectStableWatermarks(opts: {
       method: "heuristic",
       samples: framePaths.length,
       labels: heuristic.map((r) => r.label || "stable mark"),
-      reason: hasOpenAiKey()
+      reason: hasLlmKey()
         ? `No clear name from AI — covered ${heuristic.length} stable border mark(s)`
-        : `No OPENAI_API_KEY — covered ${heuristic.length} stable border mark(s). Set a key for name-aware detection.`,
+        : `Covered ${heuristic.length} stable border mark(s) with heuristics. Add an OpenAI API key for name-aware detection.`,
     };
   }
 
@@ -323,8 +323,8 @@ export async function detectStableWatermarks(opts: {
     method: "none",
     samples: framePaths.length,
     labels: [],
-    reason: hasOpenAiKey()
+    reason: hasLlmKey()
       ? "No stable burned-in names or logos found"
-      : "Nothing found. Set OPENAI_API_KEY so AI can read names like “flux”, or pick a corner manually.",
+      : "Nothing found. Add an OpenAI API key so AI can read names like “flux”, or pick a corner manually.",
   };
 }

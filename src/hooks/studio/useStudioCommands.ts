@@ -47,6 +47,9 @@ export type StudioCommandActions = {
   setDarkTheme: Dispatch<SetStateAction<boolean>>;
   setShowKeymap: Dispatch<SetStateAction<boolean>>;
   setEditTool: Dispatch<SetStateAction<ToolId>>;
+  toggleSimpleMode?: () => void;
+  detectBeats?: () => void | Promise<void>;
+  snapPlayheadToBeat?: () => void;
 };
 
 /**
@@ -175,7 +178,25 @@ export function useStudioCommands(actions: StudioCommandActions): CommandItem[] 
           },
         },
         { id: "theme", label: "Toggle day / night theme", run: () => a.setDarkTheme((v) => !v) },
-        { id: "keymap", label: "Keyboard shortcuts", run: () => a.setShowKeymap(true) },
+        {
+          id: "simple-mode",
+          label: "Toggle Simple mode",
+          hint: "Hide dense inspector & media rail",
+          shortcut: "Ctrl+K → Simple",
+          run: () => a.toggleSimpleMode?.(),
+        },
+        {
+          id: "detect-beats",
+          label: "Detect beats / transients",
+          hint: "Snap cuts to music",
+          run: () => void a.detectBeats?.(),
+        },
+        {
+          id: "snap-beat",
+          label: "Snap playhead to nearest beat",
+          run: () => a.snapPlayheadToBeat?.(),
+        },
+        { id: "keymap", label: "Keyboard shortcuts", shortcut: "?", run: () => a.setShowKeymap(true) },
         { id: "tool-select", label: "Tool: Select", shortcut: "V", run: () => a.setEditTool("select") },
         { id: "tool-blade", label: "Tool: Blade", shortcut: "C", run: () => a.setEditTool("blade") },
         { id: "tool-trim", label: "Tool: Trim", shortcut: "T", run: () => a.setEditTool("trim") },

@@ -1,21 +1,24 @@
 /**
- * Thin LLM wrapper — OpenAI when OPENAI_API_KEY is set, otherwise heuristic fallbacks.
- * Never throws for missing key; callers get `{ usedLlm: false, text }`.
+ * Optional OpenAI wrapper for chat / vision helpers.
+ * Never throws for a missing key; callers get `{ usedLlm: false, text }`.
  */
 
 export type LlmResult = {
   text: string;
   usedLlm: boolean;
+  provider?: "openai";
+  model?: string;
 };
 
 export function hasOpenAiKey(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim());
 }
 
-/**
- * Chat completion with a short timeout. Returns empty string + usedLlm:false on failure.
- */
-export async function llmComplete(opts: {
+export function hasLlmKey(): boolean {
+  return hasOpenAiKey();
+}
+
+async function openaiComplete(opts: {
   system: string;
   user: string;
   maxTokens?: number;
@@ -52,9 +55,14 @@ export async function llmComplete(opts: {
       choices?: { message?: { content?: string } }[];
     };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
-    return { text, usedLlm: Boolean(text) };
+    return {
+      text,
+      usedLlm: Boolean(text),
+      provider: "openai",
+      model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+    };
   } catch (e) {
-    console.warn("[llm] request failed", e);
+    console.warn("[llm] OpenAI request failed", e);
     return { text: "", usedLlm: false };
   } finally {
     clearTimeout(timer);
@@ -62,8 +70,20 @@ export async function llmComplete(opts: {
 }
 
 /**
+ * Chat completion with a short timeout. Returns empty string + usedLlm:false on failure.
+ */
+export async function llmComplete(opts: {
+  system: string;
+  user: string;
+  maxTokens?: number;
+  temperature?: number;
+  json?: boolean;
+}): Promise<LlmResult> {
+  return openaiComplete(opts);
+}
+
+/**
  * Vision chat — user content can mix text + images (data URLs or https).
- * Used for watermark / burned-in name detection.
  */
 export async function llmVision(opts: {
   system: string;
@@ -73,9 +93,10 @@ export async function llmVision(opts: {
   maxTokens?: number;
   temperature?: number;
 }): Promise<LlmResult> {
+  if (!opts.images.length) return { text: "", usedLlm: false };
+
   const key = process.env.OPENAI_API_KEY?.trim();
   if (!key) return { text: "", usedLlm: false };
-  if (!opts.images.length) return { text: "", usedLlm: false };
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000);
@@ -97,7 +118,10 @@ export async function llmVision(opts: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_VISION_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+        model:
+          process.env.OPENAI_VISION_MODEL?.trim() ||
+          process.env.OPENAI_MODEL?.trim() ||
+          "gpt-4o-mini",
         temperature: opts.temperature ?? 0.1,
         max_tokens: opts.maxTokens ?? 900,
         messages: [
@@ -115,13 +139,17 @@ export async function llmVision(opts: {
       choices?: { message?: { content?: string } }[];
     };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
-    return { text, usedLlm: Boolean(text) };
+    return { text, usedLlm: Boolean(text), provider: "openai" };
   } catch (e) {
     console.warn("[llm-vision] request failed", e);
     return { text: "", usedLlm: false };
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function llmStatus(): { hasOpenAi: boolean } {
+  return { hasOpenAi: hasOpenAiKey() };
 }
 
 /** Parse JSON from an LLM reply (strips markdown fences). */

@@ -27,7 +27,7 @@ const BUILTIN: NamedPreset[] = [
   },
   {
     id: "reels-1080",
-    label: "Reels / TikTok",
+    label: "Vertical 1080",
     options: { ...DEFAULT_EXPORT, format: "mp4", codec: "h264", resolution: 1080, fps: 30, quality: "high" },
   },
   {
@@ -181,12 +181,12 @@ export function ExportDialog({
   }
 
   function encoderHint() {
-    if (options.format === "gif") return "palette";
+    if (options.format === "gif") return "Animated GIF";
     if (hwEligible && options.hwEncode !== false && hwAvailable) return hwLabel;
-    if (codec === "hevc") return "CPU (libx265)";
-    if (codec === "av1") return "CPU (libaom-av1)";
-    if (codec === "vp9") return "CPU (libvpx-vp9)";
-    return "CPU (libx264)";
+    if (codec === "hevc") return "Reliable · smaller";
+    if (codec === "av1") return "Reliable · modern";
+    if (codec === "vp9") return "Reliable · web";
+    return "Reliable";
   }
 
   function saveFavorite() {
@@ -257,7 +257,7 @@ export function ExportDialog({
 
             {options.format !== "gif" && codecsForFormat.length > 1 && (
               <div className="export-group">
-                <span className="export-label">Codec</span>
+                <span className="export-label">Format style</span>
                 <div className="seg">
                   {codecsForFormat.map((c) => (
                     <button
@@ -322,7 +322,7 @@ export function ExportDialog({
             {hwEligible && (
               <label className="export-group seg-row">
                 <span className="export-label">
-                  Hardware encode {hwAvailable ? `(${hwLabel})` : "(not available)"}
+                  Hardware speed {hwAvailable ? `(${hwLabel})` : "(not available)"}
                 </span>
                 <input
                   type="checkbox"
@@ -334,7 +334,7 @@ export function ExportDialog({
             )}
 
             <label className="export-group seg-row">
-              <span className="export-label">Karaoke captions (Whisper words)</span>
+              <span className="export-label">Word-highlight captions</span>
               <input
                 type="checkbox"
                 checked={Boolean(options.karaokeCaptions)}
@@ -345,8 +345,7 @@ export function ExportDialog({
             </label>
             {options.karaokeCaptions && (
               <p className="tool-hint">
-                Burns word-level captions from a cached transcript. Transcribe in the Script
-                tab first.
+                Burns captions from a saved transcript. Run speech capture in Script first.
               </p>
             )}
           </div>
@@ -360,7 +359,9 @@ export function ExportDialog({
                   {options.format === "gif" ? "640" : outW}×
                   {options.format === "gif" ? Math.round((outH / outW) * 640) : outH} ·{" "}
                   {options.format.toUpperCase()}
-                  {options.format !== "gif" ? ` · ${codec.toUpperCase()}` : ""}
+                  {options.format !== "gif"
+                    ? ` · ${EXPORT_CODECS.find((c) => c.id === codec)?.label || "Standard"}`
+                    : ""}
                 </span>
               </div>
               <div>

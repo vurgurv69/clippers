@@ -1,89 +1,50 @@
 import fs from "fs/promises";
-import os from "os";
 import path from "path";
 import { ffmpegPath, runCommand } from "./binaries";
 import { jobDir } from "./jobs";
 import { detectScriptLanguage } from "./topic-title";
 import type { TranscriptSegment, TranscriptWord } from "./types";
+import {
+  getWhisperTranscriber,
+  whisperLoadedModelId,
+  WHISPER_SAMPLE_RATE,
+  type WhisperResult,
+  type WhisperTranscriber,
+} from "./whisper";
+
+export { warmWhisper, WHISPER_SAMPLE_RATE as SAMPLE_RATE } from "./whisper";
 
 type WhisperChunk = {
   text?: string;
   timestamp?: [number, number | null];
 };
 
-type WhisperResult = {
-  text?: string;
-  chunks?: WhisperChunk[];
-};
+type Transcriber = WhisperTranscriber;
 
-type RawAudio = { data: Float32Array; sampling_rate: number };
-type Transcriber = (
-  audio: Float32Array | string | RawAudio,
-  options?: Record<string, unknown>,
-) => Promise<WhisperResult>;
-
-const SAMPLE_RATE = 16000;
-/** Larger chunks = fewer model calls (biggest local speed win after tiny model). */
+const SAMPLE_RATE = WHISPER_SAMPLE_RATE;
+/** Chunk size for ASR windows. */
 const CHUNK_SECONDS = 30;
-/** Skip near-silent audio more aggressively so Whisper isn't run on dead air. */
-const SILENCE_ENERGY = 0.012;
 /**
- * Cap how much speech we feed Whisper. Long YouTube videos were taking ages;
- * active-audio scoring still covers the rest of the timeline.
+ * Only skip near-digital silence. Soft speech / whispers must still be transcribed
+ * so trailing dialogue and quiet lines are not dropped.
  */
-const MAX_ASR_SECONDS = Number(process.env.WHISPER_MAX_SECONDS || 600);
-
-let transcriberPromise: Promise<Transcriber> | null = null;
-let loadedModelId: string | null = null;
-
-function modelForQuality(quality?: string) {
-  const q = (quality || process.env.WHISPER_QUALITY || "fast").toLowerCase();
-  if (process.env.WHISPER_MODEL) return process.env.WHISPER_MODEL;
-  if (q === "best" || q === "balanced") return "Xenova/whisper-small";
-  return "Xenova/whisper-tiny";
-}
+const SILENCE_ENERGY = 0.0028;
+/**
+ * Cap spoken ASR seconds (override with WHISPER_MAX_SECONDS).
+ * Default 0 = no cap (full video). Positive values still allow long jobs without OOM.
+ */
+const MAX_ASR_SECONDS = Number(process.env.WHISPER_MAX_SECONDS || 0);
 
 async function getTranscriber(quality?: string): Promise<Transcriber> {
-  const model = modelForQuality(quality);
-  if (transcriberPromise && loadedModelId === model) return transcriberPromise;
-
-  loadedModelId = model;
-  transcriberPromise = (async () => {
-    const { pipeline, env } = await import("@xenova/transformers");
-    env.allowLocalModels = false;
-    env.useBrowserCache = false;
-    try {
-      const threads = Math.max(1, Math.min(8, os.cpus().length || 2));
-      const wasm = (env as { backends?: { onnx?: { wasm?: { numThreads?: number } } } })
-        .backends?.onnx?.wasm;
-      if (wasm) wasm.numThreads = threads;
-    } catch {
-      // ignore
-    }
-
-    try {
-      const asr = await pipeline("automatic-speech-recognition", model, {
-        quantized: true,
-      });
-      return asr as unknown as Transcriber;
-    } catch {
-      const asr = await pipeline(
-        "automatic-speech-recognition",
-        "Xenova/whisper-tiny",
-        { quantized: true },
-      );
-      loadedModelId = "Xenova/whisper-tiny";
-      return asr as unknown as Transcriber;
-    }
-  })();
-  return transcriberPromise;
+  return getWhisperTranscriber(quality);
 }
 
-async function extractWav(videoPath: string, wavPath: string) {
-  await runCommand(ffmpegPath(), [
+async function extractWav(videoPath: string, wavPath: string, maxSeconds?: number) {
+  const args = [
     "-y",
     "-i",
     videoPath,
+    ...(maxSeconds && maxSeconds > 0 ? ["-t", String(maxSeconds)] : []),
     "-vn",
     "-ac",
     "1",
@@ -91,8 +52,11 @@ async function extractWav(videoPath: string, wavPath: string) {
     String(SAMPLE_RATE),
     "-c:a",
     "pcm_s16le",
+    "-threads",
+    "0",
     wavPath,
-  ]);
+  ];
+  await runCommand(ffmpegPath(), args);
 }
 
 async function wavToFloat32(wavPath: string): Promise<Float32Array> {
@@ -124,6 +88,12 @@ function cleanWord(raw: string) {
   return raw
     .replace(/^[^\w\u0600-\u06FF']+|[^\w\u0600-\u06FF']+$/gu, "")
     .trim();
+}
+
+function asWhisperResult(raw: unknown): WhisperResult {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value || typeof value !== "object") return {};
+  return value as WhisperResult;
 }
 
 function resultToChunks(result: WhisperResult, audioLenSec: number): WhisperChunk[] {
@@ -210,34 +180,42 @@ async function transcribeChunk(
   timeOffset: number,
   langHint: "arabic" | "english" | null,
 ): Promise<{ words: TranscriptWord[]; hint: "arabic" | "english" | null }> {
-  const baseOpts: Record<string, unknown> = {
-    return_timestamps: true,
-    // Smaller stride = less re-processing of overlap (faster).
-    chunk_length_s: 30,
-    stride_length_s: 3,
-    task: "transcribe",
+  const seconds = slice.length / SAMPLE_RATE;
+  const run = async (timestamps: boolean | "word", language?: string) => {
+    const opts: Record<string, unknown> = {
+      return_timestamps: timestamps,
+      task: "transcribe",
+    };
+    // Already sliced ~30s — extra Whisper windowing on an object (not a
+    // Float32Array) used to produce zero audio and empty captions.
+    if (seconds > 32) {
+      opts.chunk_length_s = 30;
+      opts.stride_length_s = 5;
+    }
+    if (language) opts.language = language;
+    else if (langHint) opts.language = langHint;
+    return asWhisperResult(await transcriber(slice, opts));
   };
-  if (langHint) baseOpts.language = langHint;
 
-  const result = await transcriber(
-    { data: slice, sampling_rate: SAMPLE_RATE },
-    baseOpts,
-  );
+  let result: WhisperResult;
+  try {
+    result = await run("word");
+  } catch {
+    result = await run(true);
+  }
 
-  let chunks = resultToChunks(result, slice.length / SAMPLE_RATE);
+  let chunks = resultToChunks(result, seconds);
 
-  // Only retry empty chunks once — don't double-run every silent/mumble slice.
-  if (!chunks.length && !langHint) {
+  if (!chunks.length) {
     for (const language of ["english", "arabic"] as const) {
-      const retry = await transcriber(
-        { data: slice, sampling_rate: SAMPLE_RATE },
-        {
-          return_timestamps: true,
-          language,
-          task: "transcribe",
-        },
-      );
-      chunks = resultToChunks(retry, slice.length / SAMPLE_RATE);
+      if (langHint && language !== langHint) continue;
+      try {
+        const retry = await run("word", language);
+        chunks = resultToChunks(retry, seconds);
+      } catch {
+        const retry = await run(true, language);
+        chunks = resultToChunks(retry, seconds);
+      }
       if (chunks.length) {
         return {
           words: chunksToWords(chunks, timeOffset),
@@ -268,8 +246,11 @@ export async function transcribeVideo(
 ): Promise<TranscriptResult> {
   const dir = jobDir(jobId);
   const wavPath = path.join(dir, "audio.wav");
-  await extractWav(videoPath, wavPath);
-  await onProgress?.(32, "Loading Whisper model…");
+  // Only decode the ASR window — avoids reading hour-long sources into RAM.
+  const extractCap =
+    MAX_ASR_SECONDS > 0 ? Math.max(60, MAX_ASR_SECONDS + 30) : undefined;
+  await extractWav(videoPath, wavPath, extractCap);
+  await onProgress?.(32, "Speech model ready…");
 
   const audio = await wavToFloat32(wavPath);
   const transcriber = await getTranscriber(whisperQuality);
@@ -281,43 +262,57 @@ export async function transcribeVideo(
   let processed = 0;
 
   for (let start = 0; start < audio.length; start += chunkSamples) {
-    if (asrSeconds >= MAX_ASR_SECONDS) break;
+    if (MAX_ASR_SECONDS > 0 && asrSeconds >= MAX_ASR_SECONDS) break;
 
     const end = Math.min(audio.length, start + chunkSamples);
     const slice = audio.subarray(start, end);
     let energy = 0;
-    for (let i = 0; i < slice.length; i += 200) {
-      energy += Math.abs(slice[i]);
+    let peak = 0;
+    let samples = 0;
+    for (let i = 0; i < slice.length; i += 160) {
+      const a = Math.abs(slice[i]);
+      energy += a;
+      if (a > peak) peak = a;
+      samples += 1;
     }
     processed += 1;
-    if (energy / (slice.length / 200) < SILENCE_ENERGY) {
+    const mean = samples ? energy / samples : 0;
+    // Only skip true digital silence — keep soft / trailing speech.
+    if (mean < SILENCE_ENERGY && peak < SILENCE_ENERGY * 4) {
       if (processed % 2 === 0) {
         const pct = 32 + Math.round((processed / totalChunks) * 18);
         await onProgress?.(
           Math.min(50, pct),
-          `Listening… skipped quiet audio (${Math.round(start / SAMPLE_RATE)}s)`,
+          `Listening… skipped silence (${Math.round(start / SAMPLE_RATE)}s)`,
         );
       }
       continue;
     }
 
     const timeOffset = start / SAMPLE_RATE;
-    try {
-      const { words, hint } = await transcribeChunk(
-        transcriber,
-        slice,
-        timeOffset,
-        langHint,
-      );
-      if (hint) langHint = hint;
-      allWords.push(...words);
-      asrSeconds += slice.length / SAMPLE_RATE;
-    } catch (err) {
-      await fs.writeFile(
-        path.join(dir, "transcribe-error.log"),
-        `chunk@${timeOffset}: ${err instanceof Error ? err.message : String(err)}\n`,
-        { flag: "a" },
-      );
+    let chunkOk = false;
+    for (let attempt = 0; attempt < 2 && !chunkOk; attempt++) {
+      try {
+        const { words, hint } = await transcribeChunk(
+          transcriber,
+          slice,
+          timeOffset,
+          langHint,
+        );
+        if (hint) langHint = hint;
+        allWords.push(...words);
+        asrSeconds += slice.length / SAMPLE_RATE;
+        chunkOk = true;
+      } catch (err) {
+        await fs.writeFile(
+          path.join(dir, "transcribe-error.log"),
+          `chunk@${timeOffset} attempt=${attempt + 1}: ${err instanceof Error ? err.message : String(err)}\n`,
+          { flag: "a" },
+        );
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      }
     }
 
     const pct = 32 + Math.round((processed / totalChunks) * 18);
@@ -340,7 +335,7 @@ export async function transcribeVideo(
         segments,
         wordCount: allWords.length,
         asrSeconds: Math.round(asrSeconds),
-        model: process.env.WHISPER_MODEL || "Xenova/whisper-tiny",
+        model: whisperLoadedModelId() || process.env.WHISPER_MODEL || "Xenova/whisper-tiny",
       },
       null,
       2,
@@ -349,4 +344,80 @@ export async function transcribeVideo(
   );
 
   return { segments, language };
+}
+
+/**
+ * Transcribe a WAV that already matches a cut clip — timestamps start at 0.
+ */
+export async function transcribeWavFile(opts: {
+  wavPath: string;
+  whisperQuality?: string;
+  /** Added to every word. Use 0 for clip-local audio. */
+  timeOffset?: number;
+}): Promise<TranscriptSegment[]> {
+  const timeOffset = opts.timeOffset ?? 0;
+  const audio = await wavToFloat32(opts.wavPath);
+  if (audio.length < SAMPLE_RATE / 4) return [];
+  const transcriber = await getTranscriber(opts.whisperQuality);
+  const { words } = await transcribeChunk(transcriber, audio, timeOffset, null);
+  if (words.length) return wordsToSegments(words);
+  return [];
+}
+
+/** Extract 16 kHz mono PCM from a cut clip (or any media). */
+export async function extractClipWav(mediaPath: string, wavPath: string) {
+  await runCommand(ffmpegPath(), [
+    "-y",
+    "-i",
+    mediaPath,
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    String(SAMPLE_RATE),
+    "-c:a",
+    "pcm_s16le",
+    wavPath,
+  ]);
+}
+
+/**
+ * Listen to one clip window and return what was actually said.
+ * Used when the full-video transcript missed that part of the audio.
+ */
+export async function transcribeClipWindow(opts: {
+  jobId: string;
+  videoPath: string;
+  start: number;
+  end: number;
+  whisperQuality?: string;
+  /** When true, timestamps stay clip-relative (t=0). */
+  zeroBased?: boolean;
+}): Promise<TranscriptSegment[]> {
+  const duration = Math.max(0.4, opts.end - opts.start);
+  const dir = jobDir(opts.jobId);
+  const wavPath = path.join(dir, `clip-${opts.start.toFixed(1)}-${opts.end.toFixed(1)}.wav`);
+  await runCommand(ffmpegPath(), [
+    "-y",
+    "-ss",
+    String(Math.max(0, opts.start)),
+    "-t",
+    String(duration),
+    "-i",
+    opts.videoPath,
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    String(SAMPLE_RATE),
+    "-c:a",
+    "pcm_s16le",
+    wavPath,
+  ]);
+
+  return transcribeWavFile({
+    wavPath,
+    whisperQuality: opts.whisperQuality,
+    timeOffset: opts.zeroBased ? 0 : opts.start,
+  });
 }

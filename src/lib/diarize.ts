@@ -1,17 +1,17 @@
 /**
- * Lightweight speaker diarization from pause gaps + energy (no extra ML deps).
- * Assigns speakerId 0..N-1 onto transcript words for colored captions.
+ * Lightweight speaker diarization from pause gaps + energy/pitch heuristics.
+ * Assigns speakerId 0..3 onto transcript words for colored captions.
  */
 import type { TranscriptSegment, TranscriptWord } from "./types";
 
 export type DiarizedWord = TranscriptWord & { speakerId: number };
 
-const SPEAKER_COLORS = [
-  "&H0000E5FF", // cyan
-  "&H0000FF9C", // green
-  "&H00FF7A4D", // coral
-  "&H00FF4DFF", // magenta
-  "&H00FFB84D", // amber
+/** Match generateAssKaraoke palette: yellow, cyan, green, magenta. */
+export const SPEAKER_COLORS = [
+  "&H0000FFFF",
+  "&H00FFFF00",
+  "&H0000FF00",
+  "&H00FF00FF",
 ];
 
 export function speakerAssColor(speakerId: number): string {
@@ -19,53 +19,68 @@ export function speakerAssColor(speakerId: number): string {
 }
 
 /**
- * Split turns on long pauses, then cluster turns by average "energy"
- * (word density / length heuristic) into up to `maxSpeakers` voices.
+ * Split turns on long pauses, then cluster turns by energy + pitch proxy
+ * into up to `maxSpeakers` voices (default 4).
  */
 export function diarizeSegments(
   segments: TranscriptSegment[],
-  maxSpeakers = 3,
+  maxSpeakers = 4,
 ): { segments: TranscriptSegment[]; speakerCount: number } {
+  const cap = Math.max(1, Math.min(4, maxSpeakers));
   const words: DiarizedWord[] = segments
     .flatMap((s) => s.words)
     .filter((w) => w.word.trim())
     .sort((a, b) => a.start - b.start)
-    .map((w) => ({ ...w, speakerId: 0 }));
+    .map((w) => ({ ...w, speakerId: w.speakerId ?? 0 }));
 
   if (words.length < 4) {
     return { segments, speakerCount: 1 };
   }
 
-  // Build turns separated by pauses > 0.55s
-  type Turn = { words: DiarizedWord[]; energy: number };
+  const tagged = new Set(
+    words.map((w) => w.speakerId).filter((id) => id != null),
+  );
+  if (tagged.size > 1 && words.some((w) => w.speakerId != null && w.speakerId > 0)) {
+    const remap = new Map<number, number>();
+    let next = 0;
+    for (const w of words) {
+      const raw = w.speakerId ?? 0;
+      if (!remap.has(raw)) remap.set(raw, next++ % cap);
+      w.speakerId = remap.get(raw)!;
+    }
+    return { segments: rebuildSegments(words), speakerCount: remap.size };
+  }
+
+  type Turn = { words: DiarizedWord[]; feature: number };
   const turns: Turn[] = [];
   let cur: DiarizedWord[] = [words[0]];
 
   for (let i = 1; i < words.length; i++) {
     const gap = words[i].start - words[i - 1].end;
     if (gap > 0.55 && cur.length) {
-      turns.push({ words: cur, energy: turnEnergy(cur) });
+      turns.push({ words: cur, feature: turnFeature(cur) });
       cur = [];
     }
     cur.push(words[i]);
   }
-  if (cur.length) turns.push({ words: cur, energy: turnEnergy(cur) });
+  if (cur.length) turns.push({ words: cur, feature: turnFeature(cur) });
 
   if (turns.length < 2) {
     return { segments, speakerCount: 1 };
   }
 
-  // K-means-ish on energy into 2..maxSpeakers
-  const k = Math.min(maxSpeakers, Math.max(2, Math.round(turns.length / 4)));
+  const k = Math.min(cap, Math.max(2, Math.round(turns.length / 4)));
   const centers = seedCenters(
-    turns.map((t) => t.energy),
+    turns.map((t) => t.feature),
     k,
   );
-  const labels = turns.map((t) => nearest(centers, t.energy));
+  const labels = turns.map((t) => nearest(centers, t.feature));
 
-  // Smooth: prefer alternating on consecutive turns with similar energy
   for (let i = 1; i < labels.length; i++) {
-    if (labels[i] === labels[i - 1] && Math.abs(turns[i].energy - turns[i - 1].energy) > 0.15) {
+    if (
+      labels[i] === labels[i - 1] &&
+      Math.abs(turns[i].feature - turns[i - 1].feature) > 0.18
+    ) {
       labels[i] = (labels[i - 1] + 1) % k;
     }
   }
@@ -74,14 +89,10 @@ export function diarizeSegments(
     for (const w of turns[i].words) w.speakerId = labels[i];
   }
 
-  const byId = new Map<number, DiarizedWord[]>();
-  for (const w of words) {
-    const list = byId.get(w.speakerId) || [];
-    list.push(w);
-    byId.set(w.speakerId, list);
-  }
+  return { segments: rebuildSegments(words), speakerCount: k };
+}
 
-  // Rebuild segments keeping original timing buckets ~10 words
+function rebuildSegments(words: DiarizedWord[]): TranscriptSegment[] {
   const rebuilt: TranscriptSegment[] = [];
   let bucket: DiarizedWord[] = [];
   let segStart = words[0].start;
@@ -113,14 +124,20 @@ export function diarizeSegments(
     }
   }
   flush(words[words.length - 1].end);
-
-  return { segments: rebuilt, speakerCount: k };
+  return rebuilt;
 }
 
-function turnEnergy(words: DiarizedWord[]) {
+/** Energy (chars/sec) + pitch proxy (shorter mean word = higher). */
+function turnFeature(words: DiarizedWord[]) {
   const dur = Math.max(0.2, words[words.length - 1].end - words[0].start);
   const chars = words.reduce((n, w) => n + w.word.length, 0);
-  return chars / dur / 20; // normalize ~0..2
+  const energy = chars / dur / 20;
+  const meanWord =
+    words.reduce((n, w) => n + Math.max(0.05, w.end - w.start), 0) /
+    words.length;
+  const pitch = Math.min(4, 1 / meanWord);
+  const rate = words.length / dur;
+  return energy * 0.55 + pitch * 0.25 + Math.min(3, rate) * 0.2;
 }
 
 function seedCenters(values: number[], k: number) {

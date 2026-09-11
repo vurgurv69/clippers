@@ -944,6 +944,21 @@
   padding: 2px 6px;
 }
 
+.cmd-hint-banner {
+  margin: 0;
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  border-bottom: 1px solid var(--divider);
+}
+
+.cmd-item-hint {
+  color: var(--muted);
+  margin-left: 8px;
+  font-size: 11px;
+}
+
 /* ── Workspace menu ─────────────────────────────────── */
 .ws-menu {
   position: absolute;
@@ -1016,6 +1031,53 @@
 }
 .studio-shell[data-tool="roll"] .clip-handle {
   cursor: col-resize;
+}
+
+/* Simple mode — collapse dense chrome; advanced still one click away */
+.studio-shell.simple-mode .cc-body {
+  --cc-bin: 72px;
+  --cc-insp: 72px;
+}
+.studio-shell.simple-mode .studio-sidebar .bin-body,
+.studio-shell.simple-mode .studio-inspector .insp-body,
+.studio-shell.simple-mode .cc-insp-search,
+.studio-shell.simple-mode .effect-library-dense {
+  display: none;
+}
+.studio-shell.simple-mode::after {
+  content: "Simple mode · Ctrl+K for commands · click Simple again for Advanced";
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 40;
+  pointer-events: none;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: rgba(245, 247, 250, 0.85);
+  background: rgba(20, 24, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Trim / snap visual feedback */
+.clip-handle:active,
+.clip-block.trimming .clip-handle {
+  opacity: 1 !important;
+  width: 10px;
+  background: #00d68f;
+  box-shadow: 0 0 0 2px rgba(0, 214, 143, 0.35);
+}
+.studio-shell.mag-dragging .clip-block.on {
+  outline: 2px solid rgba(0, 200, 255, 0.55);
+  outline-offset: 1px;
+}
+.studio-shell.mag-dragging .playhead::after {
+  content: "";
+  position: absolute;
+  inset: 0 -1px;
+  background: rgba(0, 200, 255, 0.35);
 }
 
 /* ── Sliders / forms ────────────────────────────────── */

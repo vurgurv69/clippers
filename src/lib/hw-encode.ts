@@ -80,19 +80,20 @@ async function smokeTestEncoder(name: HwEncoder): Promise<boolean> {
 
 function hwExtraArgs(encoder: HwEncoder, quality: ExportQuality): string[] {
   if (encoder.endsWith("_nvenc")) {
-    const cq = quality === "high" ? "19" : quality === "medium" ? "23" : "28";
+    const cq = quality === "high" ? "17" : quality === "medium" ? "20" : "26";
+    // p4 balances speed vs sharpness (p1 looked soft on shorts)
     return ["-preset", "p4", "-rc", "vbr", "-cq", cq, "-b:v", "0"];
   }
   if (encoder.endsWith("_qsv")) {
-    const q = quality === "high" ? "19" : quality === "medium" ? "23" : "28";
+    const q = quality === "high" ? "17" : quality === "medium" ? "21" : "26";
     return ["-global_quality", q, "-look_ahead", "1"];
   }
   if (encoder.endsWith("_amf")) {
-    const q = quality === "high" ? "18" : quality === "medium" ? "22" : "28";
-    return ["-quality", "balanced", "-rc", "cqp", "-qp_i", q, "-qp_p", q];
+    const q = quality === "high" ? "16" : quality === "medium" ? "20" : "26";
+    return ["-quality", "quality", "-rc", "cqp", "-qp_i", q, "-qp_p", q];
   }
   if (encoder.endsWith("_videotoolbox")) {
-    const br = quality === "high" ? "8M" : quality === "medium" ? "5M" : "3M";
+    const br = quality === "high" ? "12M" : quality === "medium" ? "8M" : "4M";
     return ["-b:v", br, "-allow_sw", "1"];
   }
   return [];
@@ -100,10 +101,21 @@ function hwExtraArgs(encoder: HwEncoder, quality: ExportQuality): string[] {
 
 function softEncodeArgs(codec: ExportCodec, quality: ExportQuality): { encoder: string; args: string[] } {
   if (codec === "hevc") {
-    const crf = quality === "high" ? 20 : quality === "medium" ? 24 : 28;
+    const crf = quality === "high" ? 18 : quality === "medium" ? 22 : 26;
     return {
       encoder: "libx265",
-      args: ["-c:v", "libx265", "-preset", "fast", "-crf", String(crf), "-pix_fmt", "yuv420p", "-tag:v", "hvc1"],
+      args: [
+        "-c:v",
+        "libx265",
+        "-preset",
+        "fast",
+        "-crf",
+        String(crf),
+        "-pix_fmt",
+        "yuv420p",
+        "-tag:v",
+        "hvc1",
+      ],
     };
   }
   if (codec === "av1") {
@@ -118,7 +130,7 @@ function softEncodeArgs(codec: ExportCodec, quality: ExportQuality): { encoder: 
         "-b:v",
         "0",
         "-cpu-used",
-        "6",
+        "8",
         "-row-mt",
         "1",
         "-pix_fmt",
@@ -140,18 +152,30 @@ function softEncodeArgs(codec: ExportCodec, quality: ExportQuality): { encoder: 
         "-row-mt",
         "1",
         "-deadline",
-        "good",
+        "realtime",
         "-cpu-used",
-        "4",
+        "8",
         "-pix_fmt",
         "yuv420p",
       ],
     };
   }
-  const crf = quality === "high" ? 18 : quality === "medium" ? 21 : 25;
+  const crf = quality === "high" ? 16 : quality === "medium" ? 19 : 23;
+  const preset = quality === "high" ? "medium" : "fast";
   return {
     encoder: "libx264",
-    args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", String(crf), "-pix_fmt", "yuv420p"],
+    args: [
+      "-c:v",
+      "libx264",
+      "-preset",
+      preset,
+      "-crf",
+      String(crf),
+      "-profile:v",
+      "high",
+      "-pix_fmt",
+      "yuv420p",
+    ],
   };
 }
 

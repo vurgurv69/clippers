@@ -1,3 +1,7 @@
+import type { CaptionAlign, CaptionFontFamily } from "./caption-style";
+
+export type { CaptionAlign, CaptionFontFamily };
+
 export type JobStatus =
   | "queued"
   | "downloading"
@@ -41,6 +45,8 @@ export type CaptionThemeId =
 
 export type ExportQuality = "high" | "very-high" | "maximum";
 export type ExportCodec = "h264" | "hevc" | "av1" | "vp9";
+/** Auto viral cuts vs TikTok/Reels clean repost. */
+export type ClipMode = "viral" | "social";
 
 export type TranscriptWord = {
   word: string;
@@ -113,6 +119,25 @@ export type Job = {
   captionTheme?: CaptionThemeId;
   captionReadMode?: CaptionReadMode;
   captionEmojis?: boolean;
+  /** User fill color (`#RRGGBB` or ASS). */
+  captionPrimary?: string;
+  /** User karaoke highlight color. */
+  captionHighlight?: string;
+  captionFont?: CaptionFontFamily;
+  captionAlign?: CaptionAlign;
+  captionFontSize?: number;
+  captionOutline?: number;
+  captionBox?: boolean;
+  /** Blur TikTok / Reels corner stamps during ffmpeg render. */
+  removeWatermark?: boolean;
+  clipMode?: ClipMode;
+  /** Mask burned-in captions (bottom band) before re-captioning. */
+  stripBurnIn?: boolean;
+  /** How many viral cuts to pick (1–10). Ignored when a manual range is set. */
+  clipCount?: number;
+  /** Raw UI clock, e.g. `03:00` or `180s`. */
+  manualStartTime?: string;
+  manualEndTime?: string;
   exportQuality?: ExportQuality;
   exportCodec?: ExportCodec;
   preferHwEncode?: boolean;

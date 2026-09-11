@@ -2,29 +2,16 @@ import { pickViralClips } from "./ai-clips";
 import { buildClipAnalytics, buildSourceChapters } from "./clip-analytics";
 import { downloadVideo, type DownloadHint } from "./download";
 import { diarizeSegments } from "./diarize";
-import { ffprobePath, runCommand } from "./binaries";
 import { parseCaptionsEnabled } from "./captions-flag";
 import { getJob, jobDir, updateJob } from "./jobs";
+import { probeDuration } from "./media-probe";
+import { clampClipCount, formatClock, resolveManualRange } from "./parse-time";
 import { renderClips } from "./render";
 import { sampleMeters } from "./system-meters";
 import { transcribeVideo } from "./transcribe";
 import fs from "fs/promises";
 import path from "path";
-import type { WhisperQuality } from "./types";
-
-async function probeDuration(videoPath: string): Promise<number> {
-  const { stdout } = await runCommand(ffprobePath(), [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    videoPath,
-  ]);
-  const n = Number.parseFloat(stdout.trim());
-  return Number.isFinite(n) ? n : 0;
-}
+import type { ClipPlan, RenderedClip, TranscriptSegment, WhisperQuality } from "./types";
 
 async function patchMeters(jobId: string) {
   const m = sampleMeters();
@@ -64,6 +51,7 @@ export async function runPipeline(jobId: string, url: string) {
     let captionsEnabled = parseCaptionsEnabled(existing?.captionsEnabled, true);
     const localSource = path.join(jobDir(jobId), "source.mp4");
     const whisperQuality = (existing?.whisperQuality || "fast") as WhisperQuality;
+    const isSocial = existing?.clipMode === "social";
 
     let videoPath = localSource;
     let title = existing?.title || "Uploaded video";
@@ -90,12 +78,20 @@ export async function runPipeline(jobId: string, url: string) {
       duration = await probeDuration(localSource);
       title = existing?.title || "Uploaded video";
     } else {
-      const hint = (existing?.downloadHint || "auto") as DownloadHint;
+      let hint = (existing?.downloadHint || "auto") as DownloadHint;
+      if (isSocial && hint === "auto") {
+        if (/tiktok/i.test(url)) hint = "tiktok";
+        else if (/instagram|instagr\.am/i.test(url)) hint = "instagram";
+      }
       const pullMsg =
         hint === "tiktok" || url.includes("tiktok")
-          ? "Pulling TikTok HD (no watermark)…"
+          ? isSocial
+            ? "Social clean · TikTok no-watermark APIs + Cobalt…"
+            : "Pulling TikTok HD (no watermark)…"
           : hint === "instagram" || url.includes("instagram")
-            ? "Pulling Instagram HD…"
+            ? isSocial
+              ? "Social clean · Instagram HD + Cobalt…"
+              : "Pulling Instagram HD…"
             : hint === "facebook" || url.includes("facebook") || url.includes("fb.")
               ? "Pulling Facebook video HQ…"
               : hint === "x" || url.includes("twitter") || url.includes("x.com")
@@ -113,7 +109,9 @@ export async function runPipeline(jobId: string, url: string) {
         message: pullMsg,
         currentTask: "download",
       });
-      const downloaded = await downloadVideo(jobId, url, hint);
+      const downloaded = await downloadVideo(jobId, url, hint, {
+        cobaltFirst: isSocial,
+      });
       videoPath = downloaded.videoPath;
       title = downloaded.title;
       duration = downloaded.duration;
@@ -122,59 +120,114 @@ export async function runPipeline(jobId: string, url: string) {
     await checkpoint(jobId);
     await patchMeters(jobId);
 
-    const whisperLabel =
-      whisperQuality === "best"
-        ? "Best Whisper"
-        : whisperQuality === "balanced"
-          ? "Balanced Whisper"
-          : "Fast Whisper";
-
-    await updateJob(jobId, {
-      status: "transcribing",
-      progress: 28,
-      message: `${whisperLabel} — listening for hooks…`,
-      title,
+    const clipCount = clampClipCount(existing?.clipCount, 4);
+    const manual = resolveManualRange(
+      existing?.manualStartTime,
+      existing?.manualEndTime,
       duration,
-      currentTask: "transcribe",
-    });
-    let { segments, language } = await transcribeVideo(
-      jobId,
-      videoPath,
-      async (pct, message) => {
-        await updateJob(jobId, {
-          status: "transcribing",
-          progress: pct,
-          message,
-          currentTask: "transcribe",
-        });
-        if (pct % 8 < 2) await patchMeters(jobId);
-      },
-      whisperQuality,
     );
 
-    // Speaker diarization (heuristic)
-    const dia = diarizeSegments(segments, 3);
-    segments = dia.segments;
-    await updateJob(jobId, { speakerCount: dia.speakerCount });
+    const whisperLabel =
+      whisperQuality === "best"
+        ? "Best accuracy"
+        : whisperQuality === "balanced"
+          ? "Balanced"
+          : "Fast";
 
-    await checkpoint(jobId);
-    await patchMeters(jobId);
+    let segments: TranscriptSegment[] = [];
+    let language: "ar" | "en" = "en";
+    let plans: ClipPlan[] = [];
 
-    await updateJob(jobId, {
-      status: "analyzing",
-      progress: 52,
-      message: segments.length
-        ? "Scoring hooks, retention & emotion for viral cuts…"
-        : "Picking loud/active moments (thin transcript)…",
-      currentTask: "analyze",
-    });
-    const plans = await pickViralClips({
-      jobId,
-      videoPath,
-      title,
-      duration,
-      segments,
-    });
+    if (isSocial && !manual) {
+      await updateJob(jobId, {
+        status: "analyzing",
+        progress: 48,
+        title,
+        duration,
+        message: "Social clean · preparing full export…",
+        currentTask: "social-clean",
+      });
+      plans = [
+        {
+          id: "clip-1",
+          title: title || "Clean repost",
+          hook: "Clean social export",
+          start: 0,
+          end: Number(duration.toFixed(3)),
+          viralityScore: 88,
+          reason: "Social Clean · logo cover + high-quality export",
+        },
+      ];
+    } else if (manual) {
+      await updateJob(jobId, {
+        status: "analyzing",
+        progress: 48,
+        title,
+        duration,
+        message: `Using section ${formatClock(manual.start)}–${formatClock(manual.end)}`,
+        currentTask: "manual-range",
+      });
+      plans = [
+        {
+          id: "clip-1",
+          title: `Section ${formatClock(manual.start)}–${formatClock(manual.end)}`,
+          hook: "Your selected time range",
+          start: manual.start,
+          end: manual.end,
+          viralityScore: 90,
+          reason: "Manual section override",
+        },
+      ];
+    } else {
+      await updateJob(jobId, {
+        status: "transcribing",
+        progress: 28,
+        message: `${whisperLabel} speech pass — listening for hooks…`,
+        title,
+        duration,
+        currentTask: "transcribe",
+      });
+      const heard = await transcribeVideo(
+        jobId,
+        videoPath,
+        async (pct, message) => {
+          await updateJob(jobId, {
+            status: "transcribing",
+            progress: pct,
+            message,
+            currentTask: "transcribe",
+          });
+          if (pct % 8 < 2) await patchMeters(jobId);
+        },
+        whisperQuality,
+      );
+      segments = heard.segments;
+      language = heard.language;
+
+      const dia = diarizeSegments(segments, 4);
+      segments = dia.segments;
+      await updateJob(jobId, { speakerCount: dia.speakerCount });
+
+      await checkpoint(jobId);
+      await patchMeters(jobId);
+
+      await updateJob(jobId, {
+        status: "analyzing",
+        progress: 52,
+        message: segments.length
+          ? `Local scoring — picking ${clipCount} heuristic cuts…`
+          : `Picking ${clipCount} loud/active moments…`,
+        currentTask: "analyze",
+      });
+      plans = await pickViralClips({
+        jobId,
+        videoPath,
+        title,
+        duration,
+        segments,
+        clipCount,
+      });
+    }
 
     const chapters = buildSourceChapters(plans);
     await updateJob(jobId, { chapters });
@@ -188,41 +241,14 @@ export async function runPipeline(jobId: string, url: string) {
       status: "rendering",
       progress: 65,
       captionsEnabled,
+      clips: [],
       message: captionsEnabled
-        ? `Pro export · ${plans.length} ${aspectRatio} clips + polished captions…`
-        : `Pro export · ${plans.length} ${aspectRatio} clips (captions OFF)…`,
+        ? `Rendering clip 1 of ${plans.length}`
+        : `Rendering clip 1 of ${plans.length} (captions OFF)`,
       currentTask: "render",
     });
 
-    const clips = await renderClips({
-      jobId,
-      videoPath,
-      plans,
-      segments,
-      language,
-      aspectRatio,
-      layoutMode,
-      captionsEnabled,
-      captionTheme: fresh?.captionTheme || existing?.captionTheme,
-      captionReadMode: fresh?.captionReadMode || existing?.captionReadMode,
-      captionEmojis: fresh?.captionEmojis ?? existing?.captionEmojis,
-      exportQuality: fresh?.exportQuality || existing?.exportQuality,
-      exportCodec: fresh?.exportCodec || existing?.exportCodec || "h264",
-      preferHwEncode: fresh?.preferHwEncode ?? existing?.preferHwEncode ?? true,
-      onProgress: async (done, total) => {
-        const progress = 65 + Math.round((done / total) * 30);
-        await updateJob(jobId, {
-          status: "rendering",
-          progress,
-          message: `Rendering clip ${done} of ${total} (audio + sharpen)…`,
-          currentTask: "render",
-        });
-        await patchMeters(jobId);
-      },
-    });
-
-    // Attach analytics per clip
-    const enriched = clips.map((c) => {
+    const enrich = (c: RenderedClip): RenderedClip => {
       const a = buildClipAnalytics({
         plan: c,
         segments,
@@ -242,7 +268,55 @@ export async function runPipeline(jobId: string, url: string) {
           recommendations: a.recommendations,
         },
       };
+    };
+
+    const clips = await renderClips({
+      jobId,
+      videoPath,
+      plans,
+      segments,
+      language,
+      aspectRatio,
+      layoutMode,
+      captionsEnabled,
+      captionTheme: fresh?.captionTheme || existing?.captionTheme,
+      captionReadMode: fresh?.captionReadMode || existing?.captionReadMode,
+      captionEmojis: fresh?.captionEmojis ?? existing?.captionEmojis,
+      captionPrimary: fresh?.captionPrimary || existing?.captionPrimary,
+      captionHighlight: fresh?.captionHighlight || existing?.captionHighlight,
+      captionFont: fresh?.captionFont || existing?.captionFont,
+      captionAlign: fresh?.captionAlign || existing?.captionAlign,
+      captionFontSize: fresh?.captionFontSize ?? existing?.captionFontSize,
+      captionOutline: fresh?.captionOutline ?? existing?.captionOutline,
+      captionBox: fresh?.captionBox ?? existing?.captionBox,
+      removeWatermark: isSocial
+        ? true
+        : fresh?.removeWatermark ?? existing?.removeWatermark ?? true,
+      downloadHint: (fresh?.downloadHint || existing?.downloadHint) as DownloadHint | undefined,
+      clipMode: isSocial ? "social" : "viral",
+      stripBurnIn: Boolean(fresh?.stripBurnIn ?? existing?.stripBurnIn),
+      exportQuality: fresh?.exportQuality || existing?.exportQuality,
+      exportCodec: fresh?.exportCodec || existing?.exportCodec || "h264",
+      preferHwEncode: fresh?.preferHwEncode ?? existing?.preferHwEncode ?? true,
+      whisperQuality,
+      onProgress: async (done, total, soFar) => {
+        const progress = 65 + Math.round((done / total) * 30);
+        const next = done < total ? done + 1 : done;
+        await updateJob(jobId, {
+          status: "rendering",
+          progress,
+          clips: soFar.map(enrich),
+          message:
+            done < total
+              ? `Rendering clip ${next} of ${total}`
+              : `Finished clip ${done} of ${total}`,
+          currentTask: "render",
+        });
+        await patchMeters(jobId);
+      },
     });
+
+    const enriched = clips.map(enrich);
 
     const top = enriched[0]?.analytics;
     await updateJob(jobId, {

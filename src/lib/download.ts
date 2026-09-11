@@ -1,11 +1,18 @@
 import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
-import { ffmpegPath, ffprobePath, runCommand, ytDlpPath } from "./binaries";
+import { ffmpegPath, runCommand, ytDlpPath } from "./binaries";
 import { jobDir } from "./jobs";
+import {
+  probeDuration,
+  probeHasAudio,
+  probeHasVideo,
+  probeHeight,
+} from "./media-probe";
 import {
   downloadInstagramHd,
   downloadTikTokNoWatermark,
+  downloadViaCobalt,
 } from "./tiktok-api";
 import { readCachedDownload, writeCachedDownload } from "./download-cache";
 import type { DownloadHint } from "./types";
@@ -118,77 +125,6 @@ function resolvePlatform(url: string, hint: DownloadHint = "auto"): Platform {
   return detectPlatform(url);
 }
 
-async function probeDuration(videoPath: string): Promise<number> {
-  const { stdout } = await runCommand(ffprobePath(), [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    videoPath,
-  ]);
-  const n = Number.parseFloat(stdout.trim());
-  return Number.isFinite(n) ? n : 0;
-}
-
-async function probeHasVideo(videoPath: string): Promise<boolean> {
-  try {
-    const { stdout } = await runCommand(ffprobePath(), [
-      "-v",
-      "error",
-      "-select_streams",
-      "v:0",
-      "-show_entries",
-      "stream=codec_type",
-      "-of",
-      "csv=p=0",
-      videoPath,
-    ]);
-    return stdout.trim().includes("video");
-  } catch {
-    return false;
-  }
-}
-
-async function probeHasAudio(videoPath: string): Promise<boolean> {
-  try {
-    const { stdout } = await runCommand(ffprobePath(), [
-      "-v",
-      "error",
-      "-select_streams",
-      "a:0",
-      "-show_entries",
-      "stream=codec_type",
-      "-of",
-      "csv=p=0",
-      videoPath,
-    ]);
-    return stdout.trim().includes("audio");
-  } catch {
-    return false;
-  }
-}
-
-async function probeHeight(videoPath: string): Promise<number> {
-  try {
-    const { stdout } = await runCommand(ffprobePath(), [
-      "-v",
-      "error",
-      "-select_streams",
-      "v:0",
-      "-show_entries",
-      "stream=height",
-      "-of",
-      "csv=p=0",
-      videoPath,
-    ]);
-    return Number.parseInt(stdout.trim(), 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
 function isMediaFile(name: string) {
   const lower = name.toLowerCase();
   return MEDIA_EXTS.some((ext) => lower.endsWith(ext));
@@ -221,7 +157,7 @@ const COMMON_ARGS = (ff: string) => [
   "--ffmpeg-location",
   ff,
   "--js-runtimes",
-  "node",
+  `node:${process.execPath.replace(/\\/g, "/")}`,
   "--no-warnings",
   "--retries",
   "12",
@@ -246,7 +182,7 @@ async function fetchTitle(
   try {
     const extra =
       platform === "youtube"
-        ? ["--extractor-args", "youtube:player_client=android,ios,web"]
+        ? ["--extractor-args", "youtube:player_client=android,tv_embedded,ios"]
         : [];
     const { stdout } = await runCommand(ytDlpPath(), [
       ...COMMON_ARGS(ff),
@@ -381,6 +317,7 @@ function buildAttempts(
         args: [
           ...base,
           ...cookies,
+          "--force-ipv4",
           "--extractor-args",
           "youtube:player_client=android,ios",
           "-f",
@@ -389,10 +326,24 @@ function buildAttempts(
         ],
       },
       {
+        label: "android progressive",
+        args: [
+          ...base,
+          ...cookies,
+          "--force-ipv4",
+          "--extractor-args",
+          "youtube:player_client=android",
+          "-f",
+          "22/18/b",
+          url,
+        ],
+      },
+      {
         label: "tv/android HQ",
         args: [
           ...base,
           ...cookies,
+          "--force-ipv4",
           "--extractor-args",
           "youtube:player_client=tv_embedded,android",
           "-f",
@@ -401,26 +352,39 @@ function buildAttempts(
         ],
       },
       {
-        label: "mweb/web HQ",
+        label: "chrome cookies",
         args: [
           ...base,
-          ...cookies,
-          "--extractor-args",
-          "youtube:player_client=mweb,web",
+          "--cookies-from-browser",
+          "chrome",
+          "--force-ipv4",
           "-f",
-          HQ_FORMAT,
+          "bv*+ba/b/best",
           url,
         ],
       },
       {
-        label: "android progressive fallback",
+        label: "edge cookies",
+        args: [
+          ...base,
+          "--cookies-from-browser",
+          "edge",
+          "--force-ipv4",
+          "-f",
+          "bv*+ba/b/best",
+          url,
+        ],
+      },
+      {
+        label: "mweb/web HQ",
         args: [
           ...base,
           ...cookies,
+          "--force-ipv4",
           "--extractor-args",
-          "youtube:player_client=android",
+          "youtube:player_client=mweb,web",
           "-f",
-          "22/18/b",
+          HQ_FORMAT,
           url,
         ],
       },
@@ -452,6 +416,7 @@ export async function downloadVideo(
   jobId: string,
   url: string,
   hint: DownloadHint = "auto",
+  opts?: { cobaltFirst?: boolean },
 ): Promise<DownloadedVideo> {
   // Reuse local cache when available
   const cached = await readCachedDownload(url);
@@ -459,7 +424,12 @@ export async function downloadVideo(
     const dir = jobDir(jobId);
     await fs.mkdir(dir, { recursive: true });
     const finalPath = path.join(dir, "source.mp4");
-    await fs.copyFile(cached.videoPath, finalPath);
+    try {
+      const { constants: fsConstants } = await import("fs");
+      await fs.copyFile(cached.videoPath, finalPath, fsConstants.COPYFILE_FICLONE);
+    } catch {
+      await fs.copyFile(cached.videoPath, finalPath);
+    }
     return {
       videoPath: finalPath,
       title: cached.title,
@@ -520,7 +490,33 @@ export async function downloadVideo(
       errors.push(
         `[tiktok-api] ${(err instanceof Error ? err.message : String(err)).slice(0, 240)}`,
       );
-      await tryYtdlp("tiktok");
+      const tryCobalt = async () => {
+        const finalPath = path.join(dir, "source.mp4");
+        await clearPartialDownloads(dir);
+        await downloadViaCobalt(url, finalPath, "TikTok video");
+        downloaded = true;
+      };
+      if (opts?.cobaltFirst) {
+        try {
+          await tryCobalt();
+        } catch (cobaltErr) {
+          errors.push(
+            `[cobalt] ${(cobaltErr instanceof Error ? cobaltErr.message : String(cobaltErr)).slice(0, 180)}`,
+          );
+          await tryYtdlp("tiktok");
+        }
+      } else {
+        await tryYtdlp("tiktok");
+        if (!downloaded) {
+          try {
+            await tryCobalt();
+          } catch (cobaltErr) {
+            errors.push(
+              `[cobalt] ${(cobaltErr instanceof Error ? cobaltErr.message : String(cobaltErr)).slice(0, 180)}`,
+            );
+          }
+        }
+      }
       if (!downloaded) {
         throw new Error(
           `TikTok download failed.\nPaste a public TikTok link, or upload an MP4.\n${errors.slice(-4).join("\n").slice(0, 900)}`,
@@ -549,7 +545,33 @@ export async function downloadVideo(
       errors.push(
         `[instagram-api] ${(err instanceof Error ? err.message : String(err)).slice(0, 280)}`,
       );
-      await tryYtdlp("instagram");
+      const tryCobalt = async () => {
+        const finalPath = path.join(dir, "source.mp4");
+        await clearPartialDownloads(dir);
+        await downloadViaCobalt(url, finalPath, "Instagram video");
+        downloaded = true;
+      };
+      if (opts?.cobaltFirst) {
+        try {
+          await tryCobalt();
+        } catch (cobaltErr) {
+          errors.push(
+            `[cobalt] ${(cobaltErr instanceof Error ? cobaltErr.message : String(cobaltErr)).slice(0, 180)}`,
+          );
+          await tryYtdlp("instagram");
+        }
+      } else {
+        await tryYtdlp("instagram");
+        if (!downloaded) {
+          try {
+            await tryCobalt();
+          } catch (cobaltErr) {
+            errors.push(
+              `[cobalt] ${(cobaltErr instanceof Error ? cobaltErr.message : String(cobaltErr)).slice(0, 180)}`,
+            );
+          }
+        }
+      }
       if (!downloaded) {
         throw new Error(
           `Instagram download failed.\nUse a public Reel/post link, or upload an MP4.\n${errors.slice(-5).join("\n").slice(0, 900)}`,
@@ -560,13 +582,23 @@ export async function downloadVideo(
     // YouTube + other sites via yt-dlp
     await tryYtdlp(platform);
     if (!downloaded) {
-      const tip =
-        platform === "youtube"
-          ? "YouTube tip: try again in a minute, or paste a different public link."
-          : "Tip: make sure the link is public — or upload an MP4.";
-      throw new Error(
-        `Download failed (${platform}).\n${tip}\n${errors.slice(-4).join("\n").slice(0, 900)}`,
-      );
+      try {
+        const finalPath = path.join(dir, "source.mp4");
+        await clearPartialDownloads(dir);
+        await downloadViaCobalt(url, finalPath, titleFromInfo || "Video");
+        downloaded = true;
+      } catch (cobaltErr) {
+        errors.push(
+          `[cobalt] ${(cobaltErr instanceof Error ? cobaltErr.message : String(cobaltErr)).slice(0, 180)}`,
+        );
+        const tip =
+          platform === "youtube"
+            ? "YouTube tip: try again in a minute, or paste a different public link."
+            : "Tip: make sure the link is public — or upload an MP4.";
+        throw new Error(
+          `Download failed (${platform}).\n${tip}\n${errors.slice(-4).join("\n").slice(0, 900)}`,
+        );
+      }
     }
   }
 

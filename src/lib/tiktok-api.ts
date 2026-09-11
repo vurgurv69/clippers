@@ -26,6 +26,7 @@ function runCurl(args: string[]): Promise<{ code: number; stdout: string; stderr
   return new Promise((resolve, reject) => {
     const child = spawn(curlBin(), args, {
       windowsHide: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -280,7 +281,7 @@ async function ytdlpDownloadFile(url: string, outPath: string): Promise<void> {
         "--",
         url,
       ],
-      { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+      { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] },
     );
     let stderr = "";
     child.stderr.on("data", (d) => {
@@ -341,9 +342,15 @@ function normalizeTikTokUrl(input: string): string {
 function normalizeInstagramUrl(input: string): string {
   try {
     const u = new URL(input.trim());
-    const m = u.pathname.match(/\/(reel|reels|p|tv)\/([^/?#]+)/i);
+    const m = u.pathname.match(/\/(reel|reels|p|tv|share\/reel|share\/p)\/([^/?#]+)/i);
     if (m) {
-      const kind = m[1].toLowerCase() === "reels" ? "reel" : m[1].toLowerCase();
+      const rawKind = m[1].toLowerCase();
+      const kind =
+        rawKind === "reels" || rawKind === "share/reel"
+          ? "reel"
+          : rawKind === "share/p"
+            ? "p"
+            : rawKind;
       return `https://www.instagram.com/${kind}/${m[2]}/`;
     }
     return u.toString();
@@ -359,7 +366,7 @@ function pickMp4Url(value: unknown, depth = 0): string | null {
     if (/^https?:\/\//i.test(s) && (/\.mp4(\?|$)/i.test(s) || /mime_type=video/i.test(s))) {
       return s;
     }
-    if (/^https?:\/\//i.test(s) && /tiktokcdn|byteoversea|musicaldown|snaptik|tikwm/i.test(s)) {
+    if (/^https?:\/\//i.test(s) && /tiktokcdn|byteoversea|musicaldown|snaptik|tikwm|cdninstagram|fbcdn|scontent/i.test(s)) {
       return s;
     }
     return null;
@@ -516,6 +523,14 @@ async function resolveViaTikTokDownloaderApis(
       if (!videoUrl) throw new Error("tiktokdownloadu: no video");
       return { title: "TikTok video", videoUrl };
     },
+    async () => {
+      const raw = await httpJson(
+        `https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(clean)}`,
+      );
+      const videoUrl = pickMp4Url(raw);
+      if (!videoUrl) throw new Error("tiklydown: no video");
+      return { title: "TikTok video", videoUrl };
+    },
   ];
 
   const errors: string[] = [];
@@ -542,19 +557,9 @@ async function resolveViaCobalt(
     "";
   const hosts = [
     ...(envHost ? [envHost.endsWith("/") ? envHost : `${envHost}/`] : []),
-    ...(apiKey
-      ? [
-          "https://api.cobalt.tools/",
-          "https://cobalt-api.kwiatekmieniany.pl/",
-        ]
-      : []),
+    "https://api.cobalt.tools/",
+    "https://cobalt-api.kwiatekmieniany.pl/",
   ];
-
-  if (!hosts.length) {
-    throw new Error(
-      "cobalt skipped (set COBALT_API_URL + COBALT_API_KEY for Cobalt)",
-    );
-  }
 
   let last = "cobalt failed";
 
@@ -639,6 +644,23 @@ async function resolveViaInstaSaveSites(
     name: string;
     fn: () => Promise<{ title: string; videoUrl: string }>;
   }> = [
+    {
+      name: "ddinstagram",
+      fn: async () => {
+        const page = new URL(clean);
+        const dd = `https://www.ddinstagram.com${page.pathname}`;
+        const res = await fetch(dd, {
+          headers: { "User-Agent": UA, Accept: "text/html" },
+        });
+        const html = await res.text();
+        const videoUrl =
+          html.match(/<meta[^>]+property="og:video"[^>]+content="([^"]+)"/i)?.[1] ||
+          html.match(/<video[^>]+src="([^"]+)"/i)?.[1] ||
+          pickMp4Url(html);
+        if (!videoUrl) throw new Error("ddinstagram: no video");
+        return { title: "Instagram video", videoUrl };
+      },
+    },
     {
       name: "saveig",
       fn: () =>
@@ -798,4 +820,15 @@ export async function downloadInstagramHd(
   throw new Error(
     `Could not pull Instagram HD automatically (${errors.join(" | ")}).`,
   );
+}
+
+/** Last-resort generic pull (YouTube / others) via Cobalt public instances. */
+export async function downloadViaCobalt(
+  mediaUrl: string,
+  outPath: string,
+  fallbackTitle = "Video",
+): Promise<{ title: string }> {
+  const api = await resolveViaCobalt(mediaUrl, fallbackTitle);
+  await httpDownloadFile(api.videoUrl, outPath, mediaUrl);
+  return { title: api.title || fallbackTitle };
 }

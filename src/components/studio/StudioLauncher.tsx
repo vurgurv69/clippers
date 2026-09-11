@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Project, ProjectAsset } from "@/lib/editor-types";
-import { StudioEditor } from "./editor/StudioEditor";
+import { StudioEditor } from "@/components/editor/StudioEditor";
 
 type RecentRow = {
   id: string;
@@ -16,7 +16,7 @@ type RecentRow = {
 /**
  * Home-page entry to the multi-clip editor. Drag videos/photos from your files
  * onto the zone (or click) — it spins up a project, uploads the media, and
- * opens the full CapCut-style editor.
+ * opens the full multi-clip editor.
  */
 export function StudioLauncher() {
   const [project, setProject] = useState<Project | null>(null);

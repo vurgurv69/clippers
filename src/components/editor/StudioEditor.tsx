@@ -252,6 +252,14 @@ export function StudioEditor({
   const [workspace, setWorkspace] = useState<WorkspaceId>("editing");
   const [cmdOpen, setCmdOpen] = useState(false);
   const [uiLarge, setUiLarge] = useState(false);
+  const [simpleMode, setSimpleMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("clippers.studio.simpleMode") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [toolbarDensity, setToolbarDensity] = useState<"s" | "m" | "l">("m");
   const [dirty, setDirty] = useState(true);
   const [inspSearch, setInspSearch] = useState("");
@@ -302,8 +310,22 @@ export function StudioEditor({
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("clip");
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("media");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("clippers.studio.simpleMode") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("clippers.studio.simpleMode") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [fxSearch, setFxSearch] = useState("");
   const [showExport, setShowExport] = useState(false);
   const [exportOpts, setExportOpts] = useState<ExportOptions>(DEFAULT_EXPORT);
@@ -1034,12 +1056,16 @@ export function StudioEditor({
     seekNextMarker,
     patchMarker,
     removeMarker,
+    detectBeats,
+    snapPlayheadToBeat,
   } = useStudioMarkers({
     current,
     markers,
     setMarkers,
     seek,
     pushToast,
+    projectId: project.id,
+    activeAssetId: selectedClip?.assetId ?? viewClips[0]?.assetId ?? null,
   });
 
   const {
@@ -1411,6 +1437,25 @@ export function StudioEditor({
     return () => window.removeEventListener("keydown", onKey);
   }, [cmdOpen]);
 
+  const toggleSimpleMode = useCallback(() => {
+    setSimpleMode((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("clippers.studio.simpleMode", next ? "1" : "0");
+      } catch {
+        // ignore
+      }
+      setSidebarCollapsed(next);
+      setInspectorCollapsed(next);
+      if (next) {
+        pushToast("Simple mode on — panels collapsed. Press again or Ctrl+K for Advanced.", "info");
+      } else {
+        pushToast("Advanced mode — full inspector & media rail", "info");
+      }
+      return next;
+    });
+  }, [pushToast]);
+
   const studioCommands = useStudioCommands({
     togglePlay,
     splitAtPlayhead,
@@ -1447,6 +1492,9 @@ export function StudioEditor({
     setDarkTheme,
     setShowKeymap,
     setEditTool,
+    toggleSimpleMode,
+    detectBeats,
+    snapPlayheadToBeat,
   });
 
   const [dragOver, setDragOver] = useState(false);
@@ -1585,7 +1633,7 @@ export function StudioEditor({
   return (
     <div className="studio-overlay" role="dialog" aria-modal="true">
       <div
-        className={`studio-shell cc-shell${darkTheme ? " dark" : " light"}${floatBin ? " float-bin" : ""}${floatInspector ? " float-inspector" : ""}${uiLarge ? " ui-large" : ""}`}
+        className={`studio-shell cc-shell${darkTheme ? " dark" : " light"}${floatBin ? " float-bin" : ""}${floatInspector ? " float-inspector" : ""}${uiLarge ? " ui-large" : ""}${simpleMode ? " simple-mode" : ""}${magDragActive ? " mag-dragging" : ""}`}
         data-tool={editTool}
       >
         <StudioTopBar
@@ -1627,6 +1675,8 @@ export function StudioEditor({
           toolbarDensity={toolbarDensity}
           onToolbarDensity={setToolbarDensity}
           onApplyWorkspace={applyWorkspace}
+          simpleMode={simpleMode}
+          onToggleSimpleMode={toggleSimpleMode}
         />
 
         <div

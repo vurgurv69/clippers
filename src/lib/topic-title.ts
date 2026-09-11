@@ -2,7 +2,9 @@
 export function detectScriptLanguage(text: string): "ar" | "en" {
   const arabic = (text.match(/[\u0600-\u06FF]/g) || []).length;
   const latin = (text.match(/[A-Za-z]/g) || []).length;
-  if (arabic > latin * 0.35 && arabic >= 3) return "ar";
+  // Prefer Arabic when enough Arabic letters are present (even mixed captions).
+  if (arabic >= 3 && arabic >= latin * 0.25) return "ar";
+  if (arabic > latin && arabic >= 2) return "ar";
   return "en";
 }
 

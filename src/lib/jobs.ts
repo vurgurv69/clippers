@@ -1,10 +1,19 @@
 import fs from "fs/promises";
 import path from "path";
 import { parseCaptionsEnabled } from "./captions-flag";
+import {
+  clampFontSize,
+  clampOutline,
+  type CaptionAlign,
+  type CaptionFontFamily,
+} from "./caption-style";
+import { clampClipCount } from "./parse-time";
+import { assertSafeResourceId, PathSafetyError, resolveUnderRoot, assertSafeClipId, resolveDataFile } from "./safe-id";
 import type {
   AspectRatio,
   CaptionReadMode,
   CaptionThemeId,
+  ClipMode,
   DownloadHint,
   ExportCodec,
   ExportQuality,
@@ -15,9 +24,17 @@ import type {
 } from "./types";
 
 const DATA_ROOT = path.join(process.cwd(), ".data");
+const JOBS_ROOT = path.join(DATA_ROOT, "jobs");
 
 export function jobDir(jobId: string) {
-  return path.join(DATA_ROOT, "jobs", jobId);
+  const id = assertSafeResourceId(jobId, "jobId");
+  return resolveUnderRoot(JOBS_ROOT, id);
+}
+
+/** Safe path to a clip media file under `.data/jobs/<id>/clips/`. */
+export function jobClipPath(jobId: string, clipId: string, ext: "mp4" | "jpg" | "ass" | "wav") {
+  const id = assertSafeClipId(clipId);
+  return resolveDataFile(jobDir(jobId), "clips", `${id}.${ext}`);
 }
 
 export function jobJsonPath(jobId: string) {
@@ -42,6 +59,19 @@ export async function createJob(
     exportQuality?: ExportQuality;
     exportCodec?: ExportCodec;
     preferHwEncode?: boolean;
+    clipCount?: number;
+    manualStartTime?: string;
+    manualEndTime?: string;
+    captionPrimary?: string;
+    captionHighlight?: string;
+    captionFont?: CaptionFontFamily;
+    captionAlign?: CaptionAlign;
+    captionFontSize?: number;
+    captionOutline?: number;
+    captionBox?: boolean;
+    removeWatermark?: boolean;
+    clipMode?: ClipMode;
+    stripBurnIn?: boolean;
   } = {},
 ): Promise<Job> {
   await ensureDataDirs();
@@ -64,6 +94,19 @@ export async function createJob(
     exportQuality: opts.exportQuality || "very-high",
     exportCodec: opts.exportCodec || "h264",
     preferHwEncode: opts.preferHwEncode !== false,
+    clipCount: clampClipCount(opts.clipCount, 4),
+    manualStartTime: opts.manualStartTime,
+    manualEndTime: opts.manualEndTime,
+    captionPrimary: opts.captionPrimary,
+    captionHighlight: opts.captionHighlight,
+    captionFont: opts.captionFont || "Montserrat",
+    captionAlign: opts.captionAlign || "bottom",
+    captionFontSize: clampFontSize(opts.captionFontSize, 72),
+    captionOutline: clampOutline(opts.captionOutline, 6),
+    captionBox: Boolean(opts.captionBox),
+    removeWatermark: opts.removeWatermark !== false,
+    clipMode: opts.clipMode === "social" ? "social" : "viral",
+    stripBurnIn: Boolean(opts.stripBurnIn),
     stageStartedAt: now,
     currentTask: "queued",
     clips: [],
@@ -93,6 +136,13 @@ export async function getJob(id: string): Promise<Job | null> {
     job.exportQuality = job.exportQuality || "very-high";
     job.exportCodec = job.exportCodec || "h264";
     if (job.preferHwEncode == null) job.preferHwEncode = true;
+    job.clipCount = clampClipCount(job.clipCount, 4);
+    job.captionFont = job.captionFont || "Montserrat";
+    job.captionAlign = job.captionAlign || "bottom";
+    if (job.captionFontSize == null) job.captionFontSize = 72;
+    if (job.captionOutline == null) job.captionOutline = 6;
+    if (job.removeWatermark == null) job.removeWatermark = true;
+    job.clipMode = job.clipMode === "social" ? "social" : "viral";
     return job;
   } catch {
     return null;

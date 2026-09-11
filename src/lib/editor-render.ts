@@ -83,7 +83,8 @@ function keyframeExpr(
     const v0 = clampV(prev[prop] as number);
     const ease = k.ease || prev.ease || "linear";
     const bez = k.bezier || prev.bezier;
-    const steps = ease === "linear" ? 1 : ease === "bezier" ? 10 : 6;
+    // Smoother pans/zooms: denser samples for non-linear eases.
+    const steps = ease === "linear" ? 1 : ease === "bezier" ? 16 : 12;
     for (let s = 1; s <= steps; s++) {
       const u = s / steps;
       const eu = easeProgress(ease, u, bez);
@@ -120,6 +121,7 @@ function xfadeName(t: TransitionKind): string {
     case "dissolve":
       return "dissolve";
     case "zoom":
+    case "zoomthrough":
       return "zoomin";
     case "zoomout":
       return "fade";
@@ -136,6 +138,7 @@ function xfadeName(t: TransitionKind): string {
     case "pull":
       return "slideleft";
     case "whip":
+      // Directional whip — smoothleft + edge blur baked in normalize.
       return "smoothleft";
     case "blur":
       return "hblur";
@@ -148,10 +151,12 @@ function xfadeName(t: TransitionKind): string {
     case "morph":
       return "smoothright";
     case "glitch":
+      // Pixelize xfade + RGB-split edge bake = digital glitch.
       return "pixelize";
     case "shake":
       return "dissolve";
     case "filmburn":
+    case "lightleak":
       return "fadegrays";
     case "circlewipe":
     case "iris":
@@ -179,10 +184,70 @@ function xfadeName(t: TransitionKind): string {
     case "fadewhite":
       return "fadewhite";
     case "flash":
+    case "flashburn":
       return "fadewhite";
     default:
       return "fade";
   }
+}
+
+/**
+ * Bake motion-designer edge FX into a clip segment so the following xfade
+ * reads as Whip / Glitch / Zoom Through / Light Leak rather than a flat dissolve.
+ * `role: out` = end of outgoing clip; `role: in` = start of incoming clip.
+ */
+function specialtyEdgeFilters(
+  kind: TransitionKind | undefined,
+  role: "out" | "in",
+  len: number,
+  tdRaw: number,
+  w: number,
+  h: number,
+): string[] {
+  if (!kind || kind === "none" || kind === "crossfade" || kind === "dissolve") return [];
+  const td = clamp(tdRaw, 0.12, Math.min(1.6, len * 0.42));
+  const tOut = Math.max(0, len - td);
+  const enableOut = `gte(t\\,${tOut.toFixed(3)})`;
+  const enableIn = `lt(t\\,${td.toFixed(3)})`;
+  const en = role === "out" ? enableOut : enableIn;
+  const parts: string[] = [];
+
+  switch (kind) {
+    case "whip":
+      // Directional motion blur on the cut edge (whip pan feel).
+      parts.push(`boxblur=luma_radius=16:luma_power=2:enable='${en}'`);
+      break;
+    case "glitch":
+      parts.push(`rgbshift=rh=12:bh=-10:enable='${en}'`);
+      parts.push(`noise=alls=28:allf=t+u:enable='${en}'`);
+      break;
+    case "zoomthrough":
+    case "zoom": {
+      const peak = role === "out" ? 1.45 : 1.35;
+      const t0 = role === "out" ? tOut : 0;
+      // Progressive overscale toward the cut, then re-crop to frame.
+      parts.push(
+        `scale=w='iw*(1+(${(peak - 1).toFixed(3)})*min(1\\,max(0\\,(t-${t0.toFixed(3)})/${td.toFixed(3)})))':h='ih*(1+(${(peak - 1).toFixed(3)})*min(1\\,max(0\\,(t-${t0.toFixed(3)})/${td.toFixed(3)})))':eval=frame`,
+      );
+      parts.push(`crop=${w}:${h}:(in_w-${w})/2:(in_h-${h})/2`);
+      break;
+    }
+    case "lightleak":
+    case "filmburn":
+      parts.push(`eq=brightness='0.22*min(1\\,max(0\\,${role === "out" ? `(t-${tOut.toFixed(3)})` : `t`}/${td.toFixed(3)}))':saturation=1.25:eval=frame`);
+      parts.push(`colorbalance=rs=0.35:gs=0.08:bs=-0.18:enable='${en}'`);
+      parts.push(`vignette=angle=PI/3:enable='${en}'`);
+      break;
+    case "flashburn":
+    case "flash":
+      parts.push(
+        `eq=brightness='0.85*min(1\\,max(0\\,${role === "out" ? `(t-${tOut.toFixed(3)})` : `(${td.toFixed(3)}-t)`}/${td.toFixed(3)}))':eval=frame`,
+      );
+      break;
+    default:
+      break;
+  }
+  return parts;
 }
 
 /** Build an atempo chain for an arbitrary speed factor (each stage is 0.5..2). */
@@ -372,13 +437,30 @@ function effectVideoFilters(effects: ClipEffect[] | undefined, w: number, h: num
       case "negate":
         out.push("negate");
         break;
+      case "chromakey": {
+        // amount = similarity/tolerance; keyBlend softens the matte edge.
+        const sim = Math.max(0.01, Math.min(1, 0.05 + a * 0.55));
+        const blend = Math.max(0, Math.min(1, (fx.keyBlend ?? 20) / 100));
+        const hex = (fx.keyColor || "#00FF00").replace(/^#/, "");
+        const color =
+          /^[0-9a-fA-F]{6}$/.test(hex) ? `0x${hex.toUpperCase()}` : "0x00FF00";
+        out.push(`chromakey=color=${color}:similarity=${sim.toFixed(3)}:blend=${blend.toFixed(3)}`);
+        out.push("format=yuva420p");
+        break;
+      }
     }
   }
   return out;
 }
 
 /** Build the color + fade video filter for a single normalized clip. */
-function clipVideoFilter(clip: TimelineClip, w: number, h: number, len: number): string {
+function clipVideoFilter(
+  clip: TimelineClip,
+  w: number,
+  h: number,
+  len: number,
+  enterFrom?: TransitionKind,
+): string {
   const b = clamp(clip.color.brightness, 0, 2) - 1;
   const c = clamp(clip.color.contrast, 0, 2);
   const s = clamp(clip.color.saturation, 0, 3);
@@ -541,6 +623,12 @@ function clipVideoFilter(clip: TimelineClip, w: number, h: number, len: number):
   }
   // Stackable per-clip effects, applied in order
   parts.push(...effectVideoFilters(clip.effects, w, h));
+  // Specialty transition edge FX (whip / glitch / zoom through / light leak / flash burn)
+  const tdEdge = clamp(clip.transitionDuration ?? 0.45, 0.12, 2);
+  parts.push(...specialtyEdgeFilters(clip.transition, "out", len, tdEdge, w, h));
+  if (enterFrom) {
+    parts.push(...specialtyEdgeFilters(enterFrom, "in", len, tdEdge, w, h));
+  }
   parts.push(`format=yuv420p`);
   const fi = clamp(clip.fadeIn, 0, len);
   const fo = clamp(clip.fadeOut, 0, len);
@@ -609,14 +697,16 @@ async function normalizeClip(opts: {
   index: number;
   w: number;
   h: number;
+  /** Transition on the previous clip — drives entrance specialty FX. */
+  enterFrom?: TransitionKind;
 }): Promise<{ segPath: string; length: number }> {
-  const { projectId, clip, asset, index, w, h } = opts;
+  const { projectId, clip, asset, index, w, h, enterFrom } = opts;
   const len = clipLength(clip); // timeline (output) length, after speed
   const sourceSpan = clipSourceLength(clip); // trimmed source length, before speed
   const segPath = path.join(workDir(projectId), `seg-${index}.mp4`);
 
   const args: string[] = ["-y"];
-  let vFilter = clipVideoFilter(clip, w, h, len);
+  let vFilter = clipVideoFilter(clip, w, h, len, enterFrom);
   // Resolve LUT placeholders to real lut3d filters using project asset paths.
   vFilter = vFilter.replace(/__LUT__([^,\[]+)/g, (_m, lutName: string) => {
     const lutPath = path.join(assetsDir(projectId), path.basename(lutName)).replace(/\\/g, "/");
@@ -752,10 +842,13 @@ async function normalizeClip(opts: {
  * Pass 2 — combine normalized intermediates with per-boundary transitions.
  * Uses concat for "none" boundaries and xfade/acrossfade for real transitions,
  * chained in a single filter graph. Video & audio lengths stay in lock-step.
+ * @param forceFade — when true, every non-none transition becomes standard crossfade
+ *   (safe fallback if exotic xfade names fail on odd frame rates).
  */
 function buildCombineGraph(
   clips: TimelineClip[],
   lengths: number[],
+  forceFade = false,
 ): { filter: string; vLabel: string; aLabel: string; duration: number } {
   const parts: string[] = [];
   let vCur = "0:v";
@@ -776,13 +869,17 @@ function buildCombineGraph(
       const dur = Math.min(td, lengths[i] - 0.05, total - 0.05);
       const safeDur = dur > 0 ? dur : 0.1;
       const offset = Math.max(0, total - safeDur);
+      // Quantize duration to frame boundaries to avoid xfade crashes on odd fps.
+      const frameDur = Math.max(1 / FPS, Math.round(safeDur * FPS) / FPS);
+      const frameOff = Math.max(0, Math.round(offset * FPS) / FPS);
+      const xName = forceFade ? "fade" : xfadeName(prevTransition);
       parts.push(
-        `[${vCur}][${i}:v]xfade=transition=${xfadeName(prevTransition)}:duration=${safeDur.toFixed(3)}:offset=${offset.toFixed(3)}[${vOut}]`,
+        `[${vCur}][${i}:v]xfade=transition=${xName}:duration=${frameDur.toFixed(3)}:offset=${frameOff.toFixed(3)}[${vOut}]`,
       );
       parts.push(
-        `[${aCur}][${i}:a]acrossfade=d=${safeDur.toFixed(3)}[${aOut}]`,
+        `[${aCur}][${i}:a]acrossfade=d=${frameDur.toFixed(3)}[${aOut}]`,
       );
-      total = total + lengths[i] - safeDur;
+      total = total + lengths[i] - frameDur;
     }
     vCur = vOut;
     aCur = aOut;
@@ -993,8 +1090,8 @@ async function rasterizeStickerToPng(stickerUrl: string, outPng: string): Promis
     }
     if (!src) return false;
     if (src.toLowerCase().endsWith(".json")) return false;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const sharpMod = require("sharp");
+    // Dynamic import — sharp is serverExternalPackages (native); skip Turbopack static resolve.
+    const sharpMod = await import("sharp");
     const sharp = (sharpMod.default || sharpMod) as (input: string) => {
       resize: (
         w: number,
@@ -1470,6 +1567,7 @@ export async function renderProject(opts: {
       index: i,
       w,
       h,
+      enterFrom: i > 0 ? mainClips[i - 1].transition : undefined,
     });
     mainSegs.push(segPath);
     mainLengths.push(length);
@@ -1626,40 +1724,94 @@ export async function renderProject(opts: {
   } else {
     const inputs: string[] = [];
     for (const p of mainSegs) inputs.push("-i", p);
-    const { filter, vLabel, aLabel, duration } = buildCombineGraph(mainClips, mainLengths);
-    finalDuration = duration;
 
-    await runCommand(
-      ffmpegPath(),
-      [
-        "-y",
-        ...inputs,
-        "-filter_complex",
-        filter,
-        "-map",
-        `[${vLabel}]`,
-        "-map",
-        `[${aLabel}]`,
-        "-r",
-        String(FPS),
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "19",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
-        combinedPath,
-      ],
-      { signal },
-    );
+    const runCombine = async (forceFade: boolean) => {
+      const { filter, vLabel, aLabel, duration } = buildCombineGraph(
+        mainClips,
+        mainLengths,
+        forceFade,
+      );
+      finalDuration = duration;
+      await runCommand(
+        ffmpegPath(),
+        [
+          "-y",
+          ...inputs,
+          "-filter_complex",
+          filter,
+          "-map",
+          `[${vLabel}]`,
+          "-map",
+          `[${aLabel}]`,
+          "-r",
+          String(FPS),
+          "-vsync",
+          "cfr",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "19",
+          "-pix_fmt",
+          "yuv420p",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+          "-movflags",
+          "+faststart",
+          combinedPath,
+        ],
+        { signal },
+      );
+    };
+
+    try {
+      await runCombine(false);
+    } catch {
+      // Exotic xfade / odd frame rates → fall back to standard crossfade, then concat.
+      try {
+        await runCombine(true);
+      } catch {
+        const concatList = path.join(path.dirname(combinedPath), "concat-fallback.txt");
+        const listBody = mainSegs
+          .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
+          .join("\n");
+        await fs.writeFile(concatList, listBody, "utf8");
+        finalDuration = mainLengths.reduce((a, b) => a + b, 0);
+        await runCommand(
+          ffmpegPath(),
+          [
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concatList,
+            "-r",
+            String(FPS),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "19",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            combinedPath,
+          ],
+          { signal },
+        );
+      }
+    }
   }
 
   // Extend duration if overlays hang past the main track

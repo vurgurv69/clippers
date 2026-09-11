@@ -105,7 +105,9 @@ export function useStudioTimelineOps(args: StudioTimelineOpsArgs) {
   const snapSec = useCallback(
     (t: number) => {
       if (!snapEnabled) return Math.max(0, t);
-      const threshold = (magnetic ? 28 : 10) / pxPerSec;
+      // Tighter magnetic pull + slightly wider snap when zoomed out for discoverability.
+      const px = magnetic ? 36 : 14;
+      const threshold = Math.max(0.04, px / pxPerSec);
       return snapToPoints(t, snapPoints, threshold, [curRef.current]);
     },
     [snapEnabled, magnetic, pxPerSec, snapPoints, curRef],

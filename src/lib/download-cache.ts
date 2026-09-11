@@ -1,11 +1,15 @@
 /**
- * Local download cache — reuse previously pulled videos by URL hash.
+ * Content-addressable download cache — reuse previously pulled videos by URL hash.
+ * Primary path: `.data/cache/downloads/<sha1>/`
+ * Legacy path: `.data/download-cache/<sha1>/` (still read for older hits)
  */
 import crypto from "crypto";
+import { constants as fsConstants } from "fs";
 import fs from "fs/promises";
 import path from "path";
 
-const CACHE_ROOT = path.join(process.cwd(), ".data", "download-cache");
+const CACHE_ROOT = path.join(process.cwd(), ".data", "cache", "downloads");
+const LEGACY_ROOT = path.join(process.cwd(), ".data", "download-cache");
 
 export function urlCacheKey(url: string) {
   return crypto.createHash("sha1").update(url.trim()).digest("hex").slice(0, 24);
@@ -15,11 +19,14 @@ export function cacheDirForUrl(url: string) {
   return path.join(CACHE_ROOT, urlCacheKey(url));
 }
 
-export async function readCachedDownload(
-  url: string,
+function legacyDirForUrl(url: string) {
+  return path.join(LEGACY_ROOT, urlCacheKey(url));
+}
+
+async function readFromDir(
+  dir: string,
 ): Promise<{ videoPath: string; title: string; duration: number } | null> {
   try {
-    const dir = cacheDirForUrl(url);
     const metaPath = path.join(dir, "meta.json");
     const videoPath = path.join(dir, "source.mp4");
     const raw = await fs.readFile(metaPath, "utf8");
@@ -30,7 +37,6 @@ export async function readCachedDownload(
     };
     const st = await fs.stat(videoPath);
     if (st.size < 50_000) return null;
-    // Cache valid for 7 days
     const age = Date.now() - new Date(meta.createdAt || 0).getTime();
     if (age > 7 * 24 * 3600_000) return null;
     return {
@@ -43,6 +49,15 @@ export async function readCachedDownload(
   }
 }
 
+export async function readCachedDownload(
+  url: string,
+): Promise<{ videoPath: string; title: string; duration: number } | null> {
+  return (
+    (await readFromDir(cacheDirForUrl(url))) ||
+    (await readFromDir(legacyDirForUrl(url)))
+  );
+}
+
 export async function writeCachedDownload(opts: {
   url: string;
   sourcePath: string;
@@ -53,7 +68,12 @@ export async function writeCachedDownload(opts: {
     const dir = cacheDirForUrl(opts.url);
     await fs.mkdir(dir, { recursive: true });
     const dest = path.join(dir, "source.mp4");
-    await fs.copyFile(opts.sourcePath, dest);
+    // Prefer clone/reflink when the OS supports it (instant on same volume).
+    try {
+      await fs.copyFile(opts.sourcePath, dest, fsConstants.COPYFILE_FICLONE);
+    } catch {
+      await fs.copyFile(opts.sourcePath, dest);
+    }
     await fs.writeFile(
       path.join(dir, "meta.json"),
       JSON.stringify(

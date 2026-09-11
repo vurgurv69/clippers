@@ -13,17 +13,6 @@ export function ffmpegPath() {
   return p;
 }
 
-export function ffprobePath() {
-  const env = process.env.FFPROBE_PATH;
-  if (env && fs.existsSync(env)) return env;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mod = require("ffprobe-static") as { path: string };
-  if (!mod?.path || !fs.existsSync(mod.path)) {
-    throw new Error("ffprobe-static binary missing. Reinstall ffprobe-static.");
-  }
-  return mod.path;
-}
-
 export function ytDlpPath() {
   const env = process.env.YT_DLP_PATH;
   if (env && fs.existsSync(env)) return env;
@@ -36,19 +25,52 @@ export function ytDlpPath() {
   );
 }
 
+export function tryFfprobePath(): string | null {
+  const env = process.env.FFPROBE_PATH;
+  if (env && fs.existsSync(env)) return env;
+  const localWin = path.join(process.cwd(), "tools", "ffprobe.exe");
+  if (fs.existsSync(localWin)) return localWin;
+  const localUnix = path.join(process.cwd(), "tools", "ffprobe");
+  if (fs.existsSync(localUnix)) return localUnix;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("ffprobe-static") as { path: string };
+    if (mod?.path && fs.existsSync(mod.path)) return mod.path;
+  } catch {
+    // package may be installed without its binary
+  }
+  return null;
+}
+
+export function ffprobePath() {
+  const found = tryFfprobePath();
+  if (found) return found;
+  throw new Error("ffprobe binary missing. ffmpeg fallback is used by media-probe.");
+}
+
 export function runCommand(
   bin: string,
   args: string[],
   opts: { cwd?: string; signal?: AbortSignal } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    if (typeof bin !== "string" || !bin.trim()) {
+      reject(new Error("Invalid binary path"));
+      return;
+    }
+    if (!Array.isArray(args) || args.some((a) => typeof a !== "string")) {
+      reject(new Error("Command args must be a string array (no shell interpolation)"));
+      return;
+    }
     if (opts.signal?.aborted) {
       reject(new Error("Cancelled"));
       return;
     }
+    // Never shell:true — args stay array-isolated to block injection.
     const child = spawn(bin, args, {
       cwd: opts.cwd,
       windowsHide: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

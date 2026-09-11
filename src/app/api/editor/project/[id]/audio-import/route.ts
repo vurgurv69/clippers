@@ -4,6 +4,13 @@ import path from "path";
 import { ffmpegPath, ffprobePath, runCommand, ytDlpPath } from "@/lib/binaries";
 import { addAsset, assetsDir, getProject, workDir } from "@/lib/editor-project";
 import type { ProjectAsset } from "@/lib/editor-types";
+import { PathSafetyError } from "@/lib/safe-id";
+import {
+  assertUploadSize,
+  assertVideoMagic,
+  UploadValidationError,
+} from "@/lib/upload-validate";
+import { assertSafeMediaUrl, UrlSafetyError } from "@/lib/url-safety";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -78,22 +85,42 @@ export async function POST(request: Request, { params }: Params) {
           { status: 400 },
         );
       }
+      const buf = Buffer.from(await file.arrayBuffer());
+      assertUploadSize(buf.length);
+      assertVideoMagic(buf);
       const tmp = path.join(workDir(id), `extract-src-${crypto.randomUUID()}${ext}`);
-      await fs.writeFile(tmp, Buffer.from(await file.arrayBuffer()));
+      await fs.writeFile(tmp, buf);
       srcPath = tmp;
       cleanup.push(tmp);
       displayName = `${file.name.replace(/\.[^.]+$/, "")} (audio)`;
     } else {
       const body = (await request.json().catch(() => ({}))) as { youtubeUrl?: string };
-      const url = (body.youtubeUrl || "").trim();
-      if (!url || (!url.includes("youtube.com") && !url.includes("youtu.be"))) {
+      const raw = (body.youtubeUrl || "").trim();
+      let safeUrl: URL;
+      try {
+        safeUrl = await assertSafeMediaUrl(raw);
+      } catch (err) {
+        if (err instanceof UrlSafetyError) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+        throw err;
+      }
+      const host = safeUrl.hostname.toLowerCase();
+      const isYt =
+        host === "youtu.be" ||
+        host === "youtube.com" ||
+        host.endsWith(".youtube.com") ||
+        host === "www.youtube.com" ||
+        host === "m.youtube.com" ||
+        host === "music.youtube.com";
+      if (!isYt) {
         return NextResponse.json(
           { error: "Paste a valid YouTube link." },
           { status: 400 },
         );
       }
+      const url = safeUrl.toString();
       const outBase = path.join(workDir(id), `yt-audio-${crypto.randomUUID()}`);
-      // yt-dlp writes outBase.m4a / .webm etc — we normalize with ffmpeg after
       try {
         await runCommand(ytDlpPath(), [
           "-f",
@@ -133,7 +160,6 @@ export async function POST(request: Request, { params }: Params) {
         }
       }
       if (!found) {
-        // yt-dlp sometimes appends title — scan work dir for newest audio
         const files = await fs.readdir(workDir(id));
         const hit = files
           .filter((f) => f.startsWith(path.basename(outBase)))
@@ -165,7 +191,6 @@ export async function POST(request: Request, { params }: Params) {
     const filename = `${assetId}.m4a`;
     const dest = path.join(assetsDir(id), filename);
 
-    // If already m4a from yt-dlp, copy; else extract
     if (srcPath.toLowerCase().endsWith(".m4a") && ctype.includes("application/json")) {
       await fs.copyFile(srcPath, dest);
     } else {
@@ -193,6 +218,12 @@ export async function POST(request: Request, { params }: Params) {
 
     return NextResponse.json({ asset });
   } catch (err) {
+    if (err instanceof UploadValidationError || err instanceof UrlSafetyError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    if (err instanceof PathSafetyError) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     const msg = err instanceof Error ? err.message : "Audio import failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

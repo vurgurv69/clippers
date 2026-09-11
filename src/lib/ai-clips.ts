@@ -1,14 +1,15 @@
+import fs from "fs/promises";
 import path from "path";
+import { computeRmsWindows, meanRms } from "./audio-energy";
 import { ffmpegPath, runCommand } from "./binaries";
 import { buildSocialPack, scoreClipWindow } from "./clip-quality";
 import { jobDir } from "./jobs";
-import { hasOpenAiKey, llmComplete, parseLlmJson } from "./llm";
 import {
   detectScriptLanguage,
   topicHookFromTranscript,
   topicTitleFromTranscript,
 } from "./topic-title";
-import type { ClipPlan, TranscriptSegment } from "./types";
+import type { ClipPlan, TranscriptSegment, TranscriptWord } from "./types";
 
 const DEAD_WORDS = [
   "subscribe",
@@ -106,39 +107,236 @@ function clampClip(
   return { start: Number(s.toFixed(2)), end: Number(e.toFixed(2)) };
 }
 
+/** Evenly spaced windows that always return exactly `clipCount` plans. */
+function spacedPlans(opts: {
+  duration: number;
+  segments: TranscriptSegment[];
+  videoTitle: string;
+  clipCount: number;
+  usedTitles?: Set<string>;
+  minLen: number;
+  maxLen: number;
+  reason: string;
+}): ClipPlan[] {
+  const {
+    duration,
+    segments,
+    videoTitle,
+    clipCount,
+    minLen,
+    maxLen,
+    reason,
+  } = opts;
+  const usedTitles = opts.usedTitles || new Set<string>();
+  const n = Math.max(1, clipCount);
+  const targetLen = Math.min(
+    maxLen,
+    Math.max(minLen, Math.min(duration, duration / Math.max(n * 0.85, 1))),
+  );
+  const span = Math.max(0, duration - targetLen);
+  const step = n <= 1 ? 0 : span / (n - 1);
+  const out: ClipPlan[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const rawStart = n === 1 ? 0 : i * step;
+    const snapped = snapToSentenceBounds(
+      rawStart,
+      rawStart + targetLen,
+      segments,
+      duration,
+      { minLen, maxLen },
+    );
+    let start = Number(Math.max(0, snapped.start).toFixed(2));
+    let end = Number(Math.min(duration, snapped.end).toFixed(2));
+    if (end - start < Math.min(minLen, duration * 0.5)) {
+      start = Number(Math.max(0, Math.min(duration - 0.5, rawStart)).toFixed(2));
+      end = Number(Math.min(duration, start + targetLen).toFixed(2));
+    }
+    if (end <= start) {
+      start = 0;
+      end = Number(duration.toFixed(2));
+    }
+    const text = windowText(segments, start, end);
+    const clipTitle = topicTitleFromTranscript({
+      text,
+      videoTitle,
+      start,
+      usedTitles,
+    });
+    out.push(
+      enrichPlan(
+        {
+          id: `clip-${i + 1}`,
+          title: clipTitle,
+          hook: topicHookFromTranscript(text, clipTitle),
+          start,
+          end,
+          viralityScore: Math.max(55, 90 - i * 3),
+          reason,
+        },
+        segments,
+        0.7,
+        duration,
+      ),
+    );
+  }
+  return out;
+}
+
 function shortSourcePlans(opts: {
   duration: number;
   segments: TranscriptSegment[];
   videoTitle: string;
+  clipCount: number;
 }): ClipPlan[] {
-  const { duration, segments, videoTitle } = opts;
+  const { duration, segments, videoTitle, clipCount } = opts;
   const usedTitles = new Set<string>();
-  const start = 0;
-  const end = Number(duration.toFixed(2));
-  const text = windowText(segments, start, end);
-  const clipTitle = topicTitleFromTranscript({
-    text,
+
+  // Too short to split meaningfully — still return exactly 1 plan.
+  if (clipCount <= 1 || duration < 4) {
+    const start = 0;
+    const end = Number(duration.toFixed(2));
+    const text = windowText(segments, start, end);
+    const clipTitle = topicTitleFromTranscript({
+      text,
+      videoTitle,
+      start,
+      usedTitles,
+    });
+    return [
+      enrichPlan(
+        {
+          id: "clip-1",
+          title: clipTitle,
+          hook: topicHookFromTranscript(text, clipTitle),
+          start,
+          end,
+          viralityScore: 88,
+          reason: "Short source · full video export",
+        },
+        segments,
+        0.85,
+        duration,
+      ),
+    ];
+  }
+
+  const minLen = Math.max(2, Math.min(14, duration / Math.max(clipCount, 1)));
+  const maxLen = Math.max(minLen + 1, Math.min(28, duration * 0.7));
+  const spaced = spacedPlans({
+    duration,
+    segments,
     videoTitle,
-    start,
+    clipCount,
     usedTitles,
+    minLen,
+    maxLen,
+    reason: "Short source · evenly spaced cuts",
+  });
+  return fulfillExactClipCount({
+    picked: spaced,
+    clipCount,
+    duration,
+    segments,
+    videoTitle,
+    usedTitles,
+    minLen,
+    maxLen,
+  });
+}
+
+function overlapsTooMuch(
+  a: { start: number; end: number },
+  b: { start: number; end: number },
+  maxOverlapSec: number,
+) {
+  const overlap = Math.min(a.end, b.end) - Math.max(a.start, b.start);
+  return overlap > maxOverlapSec;
+}
+
+/** Guarantee exactly `clipCount` plans — pad with spaced windows if scoring undershoots. */
+function fulfillExactClipCount(opts: {
+  picked: ClipPlan[];
+  clipCount: number;
+  duration: number;
+  segments: TranscriptSegment[];
+  videoTitle: string;
+  usedTitles: Set<string>;
+  minLen: number;
+  maxLen: number;
+}): ClipPlan[] {
+  const { clipCount, duration, segments, videoTitle, usedTitles, minLen, maxLen } =
+    opts;
+  const picked = [...opts.picked];
+
+  if (picked.length >= clipCount) {
+    return picked.slice(0, clipCount).map((p, i) => ({ ...p, id: `clip-${i + 1}` }));
+  }
+
+  const fillers = spacedPlans({
+    duration,
+    segments,
+    videoTitle,
+    clipCount,
+    usedTitles,
+    minLen,
+    maxLen,
+    reason: "Clippers · filled to requested count",
   });
 
-  return [
-    enrichPlan(
-      {
-        id: "clip-1",
-        title: clipTitle,
-        hook: topicHookFromTranscript(text, clipTitle),
-        start,
-        end,
-        viralityScore: 88,
-        reason: "Short source · full video export (under 40s)",
-      },
-      segments,
-      0.85,
-      duration,
-    ),
-  ];
+  for (const fill of fillers) {
+    if (picked.length >= clipCount) break;
+    const conflict = picked.some((p) =>
+      overlapsTooMuch(p, fill, Math.max(4, (fill.end - fill.start) * 0.45)),
+    );
+    if (conflict && picked.length > 0) continue;
+    picked.push({ ...fill, id: `clip-${picked.length + 1}` });
+  }
+
+  // Last resort: accept overlaps so the user always gets N exports.
+  if (picked.length < clipCount) {
+    for (const fill of fillers) {
+      if (picked.length >= clipCount) break;
+      if (picked.some((p) => Math.abs(p.start - fill.start) < 0.5)) continue;
+      picked.push({ ...fill, id: `clip-${picked.length + 1}` });
+    }
+  }
+
+  while (picked.length < clipCount) {
+    const i = picked.length;
+    const len = Math.min(maxLen, Math.max(minLen, duration / clipCount));
+    const start = Number(
+      Math.min(Math.max(0, duration - len), (i / clipCount) * Math.max(0, duration - len)).toFixed(
+        2,
+      ),
+    );
+    const end = Number(Math.min(duration, start + len).toFixed(2));
+    const text = windowText(segments, start, end);
+    const clipTitle = topicTitleFromTranscript({
+      text,
+      videoTitle,
+      start,
+      usedTitles,
+    });
+    picked.push(
+      enrichPlan(
+        {
+          id: `clip-${i + 1}`,
+          title: clipTitle,
+          hook: topicHookFromTranscript(text, clipTitle),
+          start,
+          end,
+          viralityScore: Math.max(50, 80 - i * 4),
+          reason: "Clippers · count pad",
+        },
+        segments,
+        0.55,
+        duration,
+      ),
+    );
+  }
+
+  return picked.slice(0, clipCount).map((p, i) => ({ ...p, id: `clip-${i + 1}` }));
 }
 
 function windowText(
@@ -152,6 +350,82 @@ function windowText(
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function allWords(segments: TranscriptSegment[]): TranscriptWord[] {
+  return segments
+    .flatMap((s) => (s.words?.length ? s.words : []))
+    .filter((w) => w.word.trim())
+    .sort((a, b) => a.start - b.start);
+}
+
+function isSentenceEnd(word: string) {
+  return /[.!?؟۔…]$/.test(word.trim());
+}
+
+/**
+ * Snap a raw window onto Whisper word end-times so clips start and end
+ * on complete sentences (no mid-clause cuts).
+ */
+export function snapToSentenceBounds(
+  start: number,
+  end: number,
+  segments: TranscriptSegment[],
+  duration: number,
+  opts?: { minLen?: number; maxLen?: number; slack?: number },
+): { start: number; end: number } {
+  const minLen = opts?.minLen ?? 8;
+  const maxLen = opts?.maxLen ?? 60;
+  const slack = opts?.slack ?? 8;
+  const words = allWords(segments);
+  if (!words.length) {
+    const s = Math.max(0, start);
+    const e = Math.min(duration, Math.max(s + minLen, end));
+    return { start: Number(s.toFixed(2)), end: Number(e.toFixed(2)) };
+  }
+
+  const sentenceStarts: number[] = [words[0].start];
+  const sentenceEnds: number[] = [];
+  for (let i = 0; i < words.length; i++) {
+    if (isSentenceEnd(words[i].word) || i === words.length - 1) {
+      sentenceEnds.push(words[i].end);
+      if (i + 1 < words.length) sentenceStarts.push(words[i + 1].start);
+    }
+  }
+  if (!sentenceEnds.length) sentenceEnds.push(words[words.length - 1].end);
+
+  const starts = sentenceStarts.filter((t) => t <= start + slack && t >= start - slack);
+  let s =
+    starts.sort((a, b) => Math.abs(a - start) - Math.abs(b - start))[0] ??
+    sentenceStarts.reduce((best, t) => (t <= start && t > best ? t : best), words[0].start);
+
+  const ends = sentenceEnds.filter((t) => t >= end - slack && t <= end + slack);
+  let e =
+    ends.sort((a, b) => Math.abs(a - end) - Math.abs(b - end))[0] ??
+    sentenceEnds.reduce((best, t) => (t >= end && t < best ? t : best), words[words.length - 1].end);
+
+  if (e <= s) e = Math.min(duration, s + minLen);
+  if (e - s > maxLen) {
+    const cap = sentenceEnds.find((t) => t > s && t - s >= minLen && t - s <= maxLen);
+    e = cap ?? s + maxLen;
+  }
+  if (e - s < minLen) {
+    const grow = sentenceEnds.find((t) => t - s >= minLen);
+    e = grow ?? Math.min(duration, s + minLen);
+  }
+
+  s = Math.max(0, s);
+  e = Math.min(duration, e);
+  return { start: Number(s.toFixed(2)), end: Number(e.toFixed(2)) };
+}
+
+function wordDensity(
+  segments: TranscriptSegment[],
+  start: number,
+  end: number,
+) {
+  const n = allWords(segments).filter((w) => w.end > start && w.start < end).length;
+  return n / Math.max(end - start, 1);
 }
 
 function countMatches(text: string, phrases: string[]) {
@@ -225,97 +499,8 @@ function activeOverlap(
   return overlap / Math.max(end - start, 1);
 }
 
-/** When OpenAI is configured, refine / pick viral windows from the transcript. */
-async function llmPickClips(opts: {
-  videoTitle: string;
-  duration: number;
-  segments: TranscriptSegment[];
-}): Promise<ClipPlan[] | null> {
-  if (!hasOpenAiKey()) return null;
-  const { videoTitle, duration, segments } = opts;
-  if (!segments.length) return null;
-
-  // Compact timed lines so the model sees structure without a huge prompt.
-  const lines = segments
-    .slice(0, 180)
-    .map((s) => `[${s.start.toFixed(1)}-${s.end.toFixed(1)}] ${s.text}`)
-    .join("\n")
-    .slice(0, 10_000);
-
-  const { text, usedLlm } = await llmComplete({
-    system: `You pick viral short-form clips from a long video transcript.
-Return ONLY JSON: {"clips":[{"start":number,"end":number,"title":string,"hook":string,"reason":string,"viralityScore":number}]}
-Rules: 2–4 clips; each 40–60s; start/end within 0..${duration.toFixed(1)}; prefer hooks, questions, reveals; titles under 8 words; Arabic or English matching the transcript; no subscribe/CTA windows.`,
-    user: `Video title: ${videoTitle}\nDuration: ${duration.toFixed(1)}s\nTranscript:\n${lines}`,
-    maxTokens: 900,
-    temperature: 0.4,
-  });
-  if (!usedLlm) return null;
-
-  const parsed = parseLlmJson<{
-    clips?: Array<{
-      start?: number;
-      end?: number;
-      title?: string;
-      hook?: string;
-      reason?: string;
-      viralityScore?: number;
-    }>;
-  }>(text);
-  if (!parsed?.clips?.length) return null;
-
-  const usedTitles = new Set<string>();
-  const plans: ClipPlan[] = [];
-  for (const c of parsed.clips) {
-    if (plans.length >= 4) break;
-    const rawStart = Number(c.start);
-    const rawEnd = Number(c.end);
-    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
-    const { start, end } = clampClip(rawStart, rawEnd, duration, "long");
-    if (end - start < 20) continue;
-    const overlaps = plans.some((p) => {
-      const o = Math.min(p.end, end) - Math.max(p.start, start);
-      return o > 18;
-    });
-    if (overlaps) continue;
-
-    const window = windowText(segments, start, end);
-    let title = (c.title || "").trim();
-    if (!title || usedTitles.has(title.toLowerCase())) {
-      title = topicTitleFromTranscript({
-        text: window,
-        videoTitle,
-        start,
-        usedTitles,
-      });
-    } else {
-      usedTitles.add(title.toLowerCase());
-    }
-    plans.push(
-      enrichPlan(
-        {
-          id: `clip-${plans.length + 1}`,
-          title,
-          hook: (c.hook || "").trim() || topicHookFromTranscript(window, title),
-          start,
-          end,
-          viralityScore: Math.max(
-            55,
-            Math.min(98, Math.round(Number(c.viralityScore) || 82)),
-          ),
-          reason: `AI pick · ${(c.reason || "strong moment").slice(0, 80)}`,
-        },
-        segments,
-        0.8,
-        duration,
-      ),
-    );
-  }
-  return plans.length ? plans : null;
-}
-
 /**
- * Viral picker: OpenAI when configured, else local scoring from transcript + audio.
+ * Viral picker: local heuristics only (transcript density, RMS energy, active ranges).
  */
 export async function pickViralClips(opts: {
   jobId: string;
@@ -323,26 +508,48 @@ export async function pickViralClips(opts: {
   title: string;
   duration: number;
   segments: TranscriptSegment[];
+  clipCount?: number;
 }): Promise<ClipPlan[]> {
   const { jobId, videoPath, title: videoTitle, duration, segments } = opts;
+  const clipCount = Math.max(1, Math.min(10, Math.round(opts.clipCount || 4)));
 
   if (duration < 2) {
     throw new Error("Video is empty or too short to process.");
   }
 
-  // TikTok / Shorts / uploads under ~40s → one full export (no 40s minimum)
+  // Short sources: still honor clipCount when the file is long enough to split.
   if (duration < SHORT_SOURCE_MAX) {
-    return shortSourcePlans({ duration, segments, videoTitle });
+    return shortSourcePlans({ duration, segments, videoTitle, clipCount });
   }
 
-  // Prefer LLM picks when key + transcript exist (falls back to heuristics).
-  const llmPlans = await llmPickClips({ videoTitle, duration, segments });
-  if (llmPlans?.length) return llmPlans.map((p) => enrichPlan(p, segments, 0.8, duration));
+  // Adaptive window length so N clips can fit the source.
+  const fitLen = Math.max(
+    12,
+    Math.min(LONG_CLIP_MAX, Math.floor(duration / Math.max(clipCount, 1))),
+  );
+  const minLen = Math.max(12, Math.min(LONG_CLIP_MIN, fitLen));
+  const maxLen = Math.max(minLen + 4, Math.min(LONG_CLIP_MAX, fitLen + 10));
 
-  // Longer sources (YouTube etc.) → 40–60s viral cuts
   const active = await detectActiveRanges(jobId, videoPath, duration);
-  const targetLens = [45, 50, 55];
-  const step = 6;
+  let rms: Array<{ t: number; rms: number }> = [];
+  try {
+    const wav = path.join(jobDir(jobId), "audio.wav");
+    await fs.access(wav);
+    rms = await computeRmsWindows(wav, 0.5);
+  } catch {
+    rms = [];
+  }
+  const peakRms = Math.max(...rms.map((r) => r.rms), 0.0001);
+
+  const targetLens = Array.from(
+    new Set([
+      minLen,
+      Math.round((minLen + maxLen) / 2),
+      maxLen,
+      Math.min(55, maxLen),
+    ]),
+  ).filter((n) => n >= 8 && n <= duration);
+  const step = Math.max(3, Math.min(8, Math.floor(minLen / 6)));
   const scored: Array<{
     start: number;
     end: number;
@@ -357,13 +564,19 @@ export async function pickViralClips(opts: {
 
   for (const len of targetLens) {
     for (let t = 0; t + len <= duration; t += step) {
-      const start = t;
-      const end = t + len;
+      const snapped = snapToSentenceBounds(t, t + len, segments, duration, {
+        minLen,
+        maxLen,
+      });
+      const start = snapped.start;
+      const end = snapped.end;
       if (start < introGuard && duration > 90) continue;
       if (end > outroGuard && duration > 90) continue;
 
       const text = windowText(segments, start, end);
       const overlap = activeOverlap(active, start, end);
+      const density = wordDensity(segments, start, end);
+      const energy = rms.length ? meanRms(rms, start, end) / peakRms : overlap;
       const quality = scoreClipWindow({
         segments,
         start,
@@ -374,11 +587,13 @@ export async function pickViralClips(opts: {
       const dead = countMatches(text, DEAD_WORDS);
 
       let score =
-        quality.viralityScore +
-        quality.hookScore * 0.25 +
-        quality.retentionScore * 0.2 -
-        dead * 12;
+        energy * 45 +
+        Math.min(density / 2.4, 1) * 40 +
+        quality.hookScore * 0.15 +
+        quality.viralityScore * 0.08 -
+        dead * 14;
 
+      if (density < 0.6) score -= 18;
       if (!text && overlap < 0.4) score -= 20;
 
       scored.push({
@@ -386,7 +601,10 @@ export async function pickViralClips(opts: {
         end,
         score,
         text,
-        reason: quality.reasons.slice(0, 2).join(" + "),
+        reason:
+          rms.length
+            ? `energy ${energy.toFixed(2)} + ${density.toFixed(1)} w/s`
+            : quality.reasons.slice(0, 2).join(" + "),
         quality,
       });
     }
@@ -396,75 +614,70 @@ export async function pickViralClips(opts: {
 
   const picked: ClipPlan[] = [];
   const usedTitles = new Set<string>();
+  // Relax overlap caps across passes so we can still reach clipCount.
+  const overlapCaps = [
+    Math.max(6, minLen * 0.35),
+    Math.max(4, minLen * 0.5),
+    Math.max(2, minLen * 0.65),
+  ];
 
-  for (const cand of scored) {
-    if (picked.length >= 4) break;
-    const overlapsExisting = picked.some((p) => {
-      const overlap = Math.min(p.end, cand.end) - Math.max(p.start, cand.start);
-      return overlap > 18;
-    });
-    if (overlapsExisting) continue;
+  for (const maxOverlap of overlapCaps) {
+    if (picked.length >= clipCount) break;
+    for (const cand of scored) {
+      if (picked.length >= clipCount) break;
+      if (picked.some((p) => overlapsTooMuch(p, cand, maxOverlap))) continue;
 
-    const { start, end } = clampClip(cand.start, cand.end, duration, "long");
-    const text = windowText(segments, start, end) || cand.text;
-    const clipTitle = topicTitleFromTranscript({
-      text,
-      videoTitle,
-      start,
-      usedTitles,
-    });
+      const snapped = snapToSentenceBounds(cand.start, cand.end, segments, duration, {
+        minLen,
+        maxLen,
+      });
+      let start = snapped.start;
+      let end = snapped.end;
+      // Prefer adaptive clamp over hard 40–60 when fitting many clips.
+      if (end - start < minLen || end - start > maxLen) {
+        const mid = (start + end) / 2;
+        start = Math.max(0, mid - minLen / 2);
+        end = Math.min(duration, start + Math.min(maxLen, Math.max(minLen, end - start)));
+      }
+      start = Number(start.toFixed(2));
+      end = Number(end.toFixed(2));
+      if (end <= start) continue;
 
-    picked.push(
-      enrichPlan(
-        {
-          id: `clip-${picked.length + 1}`,
-          title: clipTitle,
-          hook: topicHookFromTranscript(text, clipTitle),
-          start,
-          end,
-          viralityScore: cand.quality.viralityScore,
-          reason: `Clippers score · ${cand.reason}`,
-        },
-        segments,
-        activeOverlap(active, start, end),
-        duration,
-      ),
-    );
-  }
-
-  if (!picked.length) {
-    const count = Math.min(3, Math.max(1, Math.floor(duration / 90)));
-    for (let i = 0; i < count; i++) {
-      const start = Math.min(
-        duration - 45,
-        introGuard + i * Math.max(60, duration / count),
-      );
-      const { start: s, end: e } = clampClip(start, start + 50, duration, "long");
-      const text = windowText(segments, s, e);
+      const text = windowText(segments, start, end) || cand.text;
       const clipTitle = topicTitleFromTranscript({
         text,
         videoTitle,
-        start: s,
+        start,
         usedTitles,
       });
+
       picked.push(
         enrichPlan(
           {
-            id: `clip-${i + 1}`,
+            id: `clip-${picked.length + 1}`,
             title: clipTitle,
             hook: topicHookFromTranscript(text, clipTitle),
-            start: s,
-            end: e,
-            viralityScore: 72 - i * 4,
-            reason: "Clippers fallback · evenly spaced active window",
+            start,
+            end,
+            viralityScore: cand.quality.viralityScore,
+            reason: `Clippers score · ${cand.reason}`,
           },
           segments,
-          0.6,
+          activeOverlap(active, start, end),
           duration,
         ),
       );
     }
   }
 
-  return picked;
+  return fulfillExactClipCount({
+    picked,
+    clipCount,
+    duration,
+    segments,
+    videoTitle,
+    usedTitles,
+    minLen,
+    maxLen,
+  });
 }

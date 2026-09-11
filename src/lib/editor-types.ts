@@ -65,7 +65,13 @@ export type TransitionKind =
   | "slideright"
   | "zoomout"
   | "iris"
-  | "dissolve";
+  | "dissolve"
+  /** Motion-designer: seamless scale push through the cut. */
+  | "zoomthrough"
+  /** Warm analog light streak / leak over the cut. */
+  | "lightleak"
+  /** Hard white flash burn (strobe hit). */
+  | "flashburn";
 
 /** UI metadata for the transition picker (label + optional favorite grouping). */
 export const TRANSITION_DEFS: { id: TransitionKind; label: string }[] = [
@@ -75,8 +81,11 @@ export const TRANSITION_DEFS: { id: TransitionKind; label: string }[] = [
   { id: "fadeblack", label: "Dip to Black" },
   { id: "fadewhite", label: "Dip to White" },
   { id: "flash", label: "Flash" },
+  { id: "flashburn", label: "Flash Burn" },
+  { id: "lightleak", label: "Light Leak" },
   { id: "zoom", label: "Zoom In" },
   { id: "zoomout", label: "Zoom Out" },
+  { id: "zoomthrough", label: "Zoom Through" },
   { id: "slide", label: "Slide Left" },
   { id: "slideright", label: "Slide Right" },
   { id: "slideup", label: "Slide Up" },
@@ -94,7 +103,7 @@ export const TRANSITION_DEFS: { id: TransitionKind; label: string }[] = [
   { id: "warp", label: "Warp" },
   { id: "liquid", label: "Liquid" },
   { id: "morph", label: "Morph" },
-  { id: "glitch", label: "Glitch" },
+  { id: "glitch", label: "Digital Glitch" },
   { id: "shake", label: "Shake" },
   { id: "filmburn", label: "Film Burn" },
   { id: "circlewipe", label: "Circle Wipe" },
@@ -166,7 +175,9 @@ export type EffectKind =
   | "tint"
   | "posterize"
   | "negate"
-  | "delogo";
+  | "delogo"
+  /** Chroma key / green screen — amount = similarity/tolerance 0..100. */
+  | "chromakey";
 
 /** Corner for watermark / logo removal (TikTok/IG-style covers). */
 export type DelogoCorner = "br" | "bl" | "tr" | "tl";
@@ -190,6 +201,10 @@ export type ClipEffect = {
   corner?: DelogoCorner;
   /** Freeform / AI-detected regions (preferred over corner when present). */
   boxes?: DelogoRegion[];
+  /** Chroma key target color (#RRGGBB). Default green screen. */
+  keyColor?: string;
+  /** Soft edge blend 0..100 for chromakey. */
+  keyBlend?: number;
 };
 
 export const EFFECT_DEFS: {
@@ -224,6 +239,13 @@ export const EFFECT_DEFS: {
   { kind: "negate", label: "Negative", hint: "Invert colors", hasAmount: false, defaultAmount: 100 },
   { kind: "emboss", label: "Emboss", hint: "Relief look", hasAmount: false, defaultAmount: 100 },
   { kind: "mirror", label: "Mirror", hint: "Flip horizontally", hasAmount: false, defaultAmount: 100 },
+  {
+    kind: "chromakey",
+    label: "Chroma Key",
+    hint: "Green screen removal — adjustable tolerance",
+    hasAmount: true,
+    defaultAmount: 40,
+  },
 ];
 
 export function defaultEffect(kind: EffectKind, id: string): ClipEffect {
@@ -234,6 +256,7 @@ export function defaultEffect(kind: EffectKind, id: string): ClipEffect {
     enabled: true,
     amount: def?.defaultAmount ?? 50,
     ...(kind === "delogo" ? { corner: "br" as DelogoCorner } : {}),
+    ...(kind === "chromakey" ? { keyColor: "#00FF00", keyBlend: 20 } : {}),
   };
 }
 
@@ -793,17 +816,23 @@ export const DEFAULT_EXPORT: ExportOptions = {
 };
 
 export const EXPORT_FORMATS: { id: ExportFormat; label: string; hint: string }[] = [
-  { id: "mp4", label: "MP4", hint: "Universal container" },
-  { id: "mov", label: "MOV", hint: "QuickTime" },
-  { id: "webm", label: "WebM", hint: "Web / smaller" },
+  { id: "mp4", label: "Standard MP4", hint: "Works everywhere" },
+  { id: "mov", label: "Apple MOV", hint: "Editing apps" },
+  { id: "webm", label: "Web file", hint: "Smaller for web" },
   { id: "gif", label: "GIF", hint: "Silent loop" },
 ];
 
 export const EXPORT_CODECS: { id: ExportCodec; label: string; formats: ExportFormat[] }[] = [
-  { id: "h264", label: "H.264", formats: ["mp4", "mov"] },
-  { id: "hevc", label: "HEVC", formats: ["mp4", "mov"] },
-  { id: "av1", label: "AV1", formats: ["mp4", "mov", "webm"] },
-  { id: "vp9", label: "VP9", formats: ["webm"] },
+  { id: "h264", label: "Standard", formats: ["mp4", "mov"] },
+  { id: "hevc", label: "Smaller file", formats: ["mp4", "mov"] },
+  { id: "av1", label: "Modern (slower)", formats: ["mp4", "mov", "webm"] },
+  { id: "vp9", label: "Web video", formats: ["webm"] },
+];
+
+export const EXPORT_QUALITIES: { id: ExportQuality; label: string }[] = [
+  { id: "low", label: "Fast" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
 ];
 
 export const EXPORT_RESOLUTIONS: { id: number; label: string }[] = [
@@ -815,12 +844,6 @@ export const EXPORT_RESOLUTIONS: { id: number; label: string }[] = [
 ];
 
 export const EXPORT_FPS: number[] = [24, 30, 60];
-
-export const EXPORT_QUALITIES: { id: ExportQuality; label: string }[] = [
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-];
 
 export type Project = {
   id: string;
@@ -921,18 +944,51 @@ export function clipLength(clip: TimelineClip): number {
   return Math.max(0.1, clipSourceLength(clip) / speed);
 }
 
-/** Expand compound clips into a flat main-lane list (export / playback lookup). */
+/** Expand compound clips into a flat main-lane list (export / playback lookup).
+ * Recurses nested compounds and inherits parent speed/grade/transition onto children.
+ */
 export function flattenCompounds(clips: TimelineClip[]): TimelineClip[] {
   const out: TimelineClip[] = [];
-  for (const c of clips) {
-    if (c.compound && c.children?.length) {
-      for (const child of c.children) {
-        out.push({ ...child, lane: c.lane ?? 0, tlStart: undefined });
+
+  function walk(
+    list: TimelineClip[],
+    inherit: {
+      lane: number;
+      speed: number;
+      color?: ColorGrade;
+      transition?: TransitionKind;
+      transitionDuration?: number;
+    },
+  ) {
+    for (const c of list) {
+      if (c.compound && c.children?.length) {
+        const childSpeed = (c.speed && c.speed > 0 ? c.speed : 1) * inherit.speed;
+        walk(c.children, {
+          lane: c.lane ?? inherit.lane,
+          speed: childSpeed,
+          color: c.color || inherit.color,
+          transition: c.transition !== "none" ? c.transition : inherit.transition,
+          transitionDuration: c.transitionDuration ?? inherit.transitionDuration,
+        });
+        continue;
       }
-    } else {
-      out.push(c);
+      const speed = (c.speed && c.speed > 0 ? c.speed : 1) * inherit.speed;
+      out.push({
+        ...c,
+        lane: c.lane ?? inherit.lane,
+        tlStart: undefined,
+        speed,
+        color: inherit.color && !c.color ? inherit.color : c.color,
+        transition: c.transition === "none" && inherit.transition ? inherit.transition : c.transition,
+        transitionDuration:
+          c.transition === "none" && inherit.transitionDuration != null
+            ? inherit.transitionDuration
+            : c.transitionDuration,
+      });
     }
   }
+
+  walk(clips, { lane: 0, speed: 1 });
   return out;
 }
 

@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { AspectRatio, Job, RenderedClip } from "@/lib/types";
 import { ASPECT_PRESETS } from "@/lib/types";
+import { ColorPickerPopover } from "@/components/ui/ColorPickerPopover";
 import {
   defaultEditSpec,
   type EditSpec,
@@ -35,6 +36,9 @@ const TRANSITIONS: { id: TransitionKind; label: string }[] = [
   { id: "fade", label: "Crossfade" },
   { id: "fadeblack", label: "Dip to black" },
   { id: "fadewhite", label: "Dip to white" },
+  { id: "flashburn", label: "Flash burn" },
+  { id: "whip", label: "Whip pan" },
+  { id: "glitch", label: "Digital glitch" },
 ];
 
 export function ClipEditor({
@@ -468,10 +472,10 @@ export function ClipEditor({
                       />
                       <div className="row">
                         <label>Color</label>
-                        <input
-                          type="color"
+                        <ColorPickerPopover
+                          label="Text color"
                           value={t.color}
-                          onChange={(e) => updateText(t.id, { color: e.target.value })}
+                          onChange={(color) => updateText(t.id, { color })}
                         />
                         <label className="checkbox">
                           <input

@@ -1,9 +1,11 @@
 import fs from "fs/promises";
 import path from "path";
-import { ffmpegPath, ffprobePath, runCommand } from "./binaries";
+import { ffmpegPath, runCommand } from "./binaries";
 import { sampleTrackAt, smoothTrack, type TrackBox } from "./clip-tracking";
+import { buildLayoutFiltergraph } from "./ffmpeg-args";
 import { jobDir } from "./jobs";
-import type { LayoutMode } from "./types";
+import { probeSize } from "./media-probe";
+import type { AspectRatio, LayoutMode } from "./types";
 
 export type PersonBox = {
   x: number;
@@ -45,22 +47,6 @@ async function getDetector() {
     })();
   }
   return detectorPromise;
-}
-
-async function probeSize(videoPath: string) {
-  const { stdout } = await runCommand(ffprobePath(), [
-    "-v",
-    "error",
-    "-select_streams",
-    "v:0",
-    "-show_entries",
-    "stream=width,height",
-    "-of",
-    "csv=p=0",
-    videoPath,
-  ]);
-  const [w, h] = stdout.trim().split(",").map((n) => Number.parseInt(n, 10));
-  return { w: w || 1280, h: h || 720 };
 }
 
 async function grabFrame(
@@ -107,7 +93,8 @@ function faceCropFromPerson(
   const useTop = box.h > box.w * 1.25;
   const h = useTop ? Math.max(box.w * 1.15, box.h * 0.55) : box.h * 1.15;
   const w = useTop ? box.w * 1.25 : box.w * 1.2;
-  const x = box.x + box.w / 2 - w / 2;
+  // Bias crop slightly left so facecam sits toward the left of the top panel.
+  const x = box.x + box.w / 2 - w / 2 - w * 0.12;
   const y = useTop ? box.y - h * 0.05 : box.y + box.h / 2 - h / 2;
   return clampBox({ x, y, w, h }, imgW, imgH);
 }
@@ -146,10 +133,17 @@ async function detectPersonOnFrame(
   }
 }
 
+function aspectToPreset(outW: number, outH: number): AspectRatio {
+  if (outW === 1080 && outH === 1920) return "9:16";
+  if (outW === 1080 && outH === 1080) return "1:1";
+  if (outW === 1080 && outH === 1350) return "4:5";
+  if (outW === 1920 && outH === 1080) return "16:9";
+  return outH > outW ? "9:16" : "16:9";
+}
+
 /**
  * Decide fill vs face-on-top.
- * - Big face/person filling the frame → talking-head, leave as fill (focused crop)
- * - Small person (facecam / streamer) → crop face and pin on top of the game/content
+ * Auto always fills the chosen aspect (9:16 etc) so the clip stays inside the frame.
  */
 export async function decideLayout(opts: {
   jobId: string;
@@ -158,11 +152,13 @@ export async function decideLayout(opts: {
   clipEnd: number;
   layoutMode: LayoutMode;
 }): Promise<LayoutDecision> {
-  const { jobId, videoPath, clipStart, clipEnd, layoutMode } = opts;
+  const { layoutMode } = opts;
 
-  if (layoutMode === "fill") {
-    return { mode: "fill", reason: "Fill crop (manual)" };
+  if (layoutMode !== "face-top") {
+    return { mode: "fill", reason: "Fill chosen aspect — no overflow" };
   }
+
+  const { jobId, videoPath, clipStart, clipEnd } = opts;
 
   const { w: imgW, h: imgH } = await probeSize(videoPath);
   const mid = (clipStart + clipEnd) / 2;
@@ -197,8 +193,8 @@ export async function decideLayout(opts: {
 
   if (!best) {
     return {
-      mode: "fill",
-      reason: "No person detected — fill crop",
+      mode: "face-top",
+      reason: "Face on top · default upper crop (no face box)",
     };
   }
 
@@ -247,39 +243,23 @@ export function buildVideoFilters(opts: {
   outW: number;
   outH: number;
   assName?: string;
+  /** Full ffmpeg ass= filter (escaped path). Preferred over assName. */
+  assFilter?: string;
   layout: LayoutDecision;
   captionsEnabled?: boolean;
+  srcW?: number;
+  srcH?: number;
+  assPath?: string;
 }): { vf?: string; filterComplex?: string; mapVideo?: string } {
-  const { outW, outH, assName, layout, captionsEnabled } = opts;
-  // Default OFF unless explicitly true — safer than accidental burns
-  const burnCaptions = captionsEnabled === true && Boolean(assName);
-  const base =
-    `scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}`;
-
-  if (layout.mode !== "face-top" || !layout.face) {
-    return {
-      vf: burnCaptions ? `${base},ass=${assName}` : base,
-    };
-  }
-
-  const { x, y, w, h } = layout.face;
-  // True split: face on top (~30%), gameplay below — more room = less zoom.
-  const facePanelH = Math.round(outH * 0.3);
-  const gamePanelH = Math.max(1, outH - facePanelH);
-
-  const parts = [
-    `[0:v]split=2[vface][vgame]`,
-    `[vface]crop=${w}:${h}:${x}:${y},scale=${outW}:${facePanelH}:force_original_aspect_ratio=increase,crop=${outW}:${facePanelH},setsar=1[face]`,
-    // Milder cover on gameplay panel + slight edge soften feel via scale
-    `[vgame]scale=${outW}:${gamePanelH}:force_original_aspect_ratio=increase,crop=${outW}:${gamePanelH},eq=contrast=1.03:saturation=1.05,setsar=1[game]`,
-    `[face][game]vstack=inputs=2[laid]`,
-  ];
-  if (burnCaptions) {
-    parts.push(`[laid]ass=${assName}[vout]`);
-    return { filterComplex: parts.join(";"), mapVideo: "[vout]" };
-  }
-
-  return { filterComplex: parts.join(";"), mapVideo: "[laid]" };
+  const { outW, outH, layout, captionsEnabled, assPath } = opts;
+  const aspect = aspectToPreset(outW, outH);
+  const mode = layout.mode === "face-top" ? "face-top" : "fill";
+  return buildLayoutFiltergraph({
+    aspect,
+    layoutMode: mode,
+    face: layout.face,
+    assPath: captionsEnabled === true ? assPath : undefined,
+  });
 }
 
 /**

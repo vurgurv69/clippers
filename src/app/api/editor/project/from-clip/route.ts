@@ -11,7 +11,8 @@ import {
 } from "@/lib/editor-project";
 import { defaultClip, DEFAULT_COLOR, DEFAULT_TRANSFORM } from "@/lib/editor-types";
 import type { AspectRatio } from "@/lib/types";
-import { getJob, jobDir } from "@/lib/jobs";
+import { getJob, jobClipPath } from "@/lib/jobs";
+import { assertSafeClipId, PathSafetyError } from "@/lib/safe-id";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -79,16 +80,17 @@ export async function POST(request: Request) {
       );
     }
 
+    const clipId = assertSafeClipId(body.clipId);
     const job = await getJob(body.jobId);
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
-    const clip = job.clips.find((c) => c.id === body.clipId);
+    const clip = job.clips.find((c) => c.id === clipId);
     if (!clip) {
       return NextResponse.json({ error: "Clip not found" }, { status: 404 });
     }
 
-    const src = path.join(jobDir(body.jobId), "clips", `${body.clipId}.mp4`);
+    const src = jobClipPath(body.jobId, clipId, "mp4");
     try {
       await fs.access(src);
     } catch {
@@ -140,6 +142,9 @@ export async function POST(request: Request) {
       message: "Opened in Studio",
     });
   } catch (err) {
+    if (err instanceof PathSafetyError) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     const message = err instanceof Error ? err.message : "Handoff failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }

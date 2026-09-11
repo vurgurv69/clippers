@@ -3,6 +3,7 @@ import path from "path";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { assetsDir, getProject } from "@/lib/editor-project";
+import { PathSafetyError, resolveDataFile, safeBasename } from "@/lib/safe-id";
 
 export const runtime = "nodejs";
 
@@ -33,25 +34,26 @@ const TYPES: Record<string, string> = {
 };
 
 export async function GET(request: Request, { params }: Params) {
-  const { id, name } = await params;
-  const project = await getProject(id);
-  if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
-  }
+  try {
+    const { id, name } = await params;
+    const project = await getProject(id);
+    if (!project) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
 
-  const safe = path.basename(name);
-  // Match original filename OR proxy filename (preview uses proxy_*.mp4).
-  const asset = project.assets.find(
-    (a) => a.filename === safe || a.proxyFile === safe,
-  );
-  if (!asset) {
-    return NextResponse.json({ error: "Asset not found" }, { status: 404 });
-  }
+    const safe = safeBasename(name);
+    // Match original filename OR proxy filename (preview uses proxy_*.mp4).
+    const asset = project.assets.find(
+      (a) => a.filename === safe || a.proxyFile === safe,
+    );
+    if (!asset) {
+      return NextResponse.json({ error: "Asset not found" }, { status: 404 });
+    }
 
-  const filePath = path.join(assetsDir(id), safe);
-  if (!fs.existsSync(filePath)) {
-    return NextResponse.json({ error: "File missing" }, { status: 404 });
-  }
+    const filePath = resolveDataFile(assetsDir(id), safe);
+    if (!fs.existsSync(filePath)) {
+      return NextResponse.json({ error: "File missing" }, { status: 404 });
+    }
 
   const stat = fs.statSync(filePath);
   const type = TYPES[path.extname(safe).toLowerCase()] || "application/octet-stream";
@@ -94,4 +96,10 @@ export async function GET(request: Request, { params }: Params) {
       "Cache-Control": "no-store",
     },
   });
+  } catch (err) {
+    if (err instanceof PathSafetyError) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    throw err;
+  }
 }

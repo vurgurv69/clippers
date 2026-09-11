@@ -1717,8 +1717,9 @@
   height: 0 !important;
   border-left: 7px solid transparent !important;
   border-right: 7px solid transparent !important;
-  border-top: 9px solid #9aa3b2 !important;
+  border-top: 9px solid var(--cc-accent, #22d3ee) !important;
   border-bottom: 0 !important;
+  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.85)) !important;
   z-index: 2 !important;
 }
 .cc-shell .playhead::after {
@@ -1729,17 +1730,28 @@
   left: 50% !important;
   width: 2px !important;
   transform: translateX(-50%) !important;
-  background: #9aa3b2 !important;
-  box-shadow: none !important;
+  background: linear-gradient(
+    180deg,
+    #ff4d6a 0%,
+    var(--cc-accent, #22d3ee) 28%,
+    var(--cc-accent, #22d3ee) 100%
+  ) !important;
+  box-shadow:
+    0 0 10px rgba(34, 211, 238, 0.75),
+    0 0 18px rgba(255, 77, 106, 0.35) !important;
   pointer-events: none !important;
 }
 .cc-shell .playhead:hover::before,
 .cc-shell .playhead:active::before {
-  border-top-color: #d4d8e0 !important;
+  border-top-color: #7aefff !important;
+  filter: drop-shadow(0 0 10px rgba(34, 211, 238, 1)) !important;
 }
 .cc-shell .playhead:hover::after,
 .cc-shell .playhead:active::after {
-  background: #d4d8e0 !important;
+  background: linear-gradient(180deg, #ff6b81 0%, #7aefff 30%, #22d3ee 100%) !important;
+  box-shadow:
+    0 0 14px rgba(34, 211, 238, 0.95),
+    0 0 22px rgba(255, 77, 106, 0.45) !important;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -5251,8 +5263,8 @@
 }
 .cc-shell .playhead {
   width: 2px !important;
-  background: var(--cc-accent) !important;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) !important;
+  background: transparent !important;
+  box-shadow: none !important;
   z-index: 30 !important;
 }
 .cc-shell .track-header .th-btn.on {
@@ -5636,4 +5648,66 @@
 .cc-shell .insp-rail-layout .seg-btn {
   width: 100% !important;
   justify-content: center !important;
+}
+
+/* -------------------------------------------------------
+   Simple Mode + trim / snap feedback (wired into CapCut shell)
+------------------------------------------------------- */
+.cc-shell.simple-mode .cc-body {
+  --cc-bin: 72px !important;
+  --cc-insp: 72px !important;
+}
+.cc-shell.simple-mode .studio-sidebar .bin-body,
+.cc-shell.simple-mode .studio-inspector .insp-body,
+.cc-shell.simple-mode .cc-insp-search,
+.cc-shell.simple-mode .effect-library-dense {
+  display: none !important;
+}
+.cc-shell.simple-mode::after {
+  content: "Simple mode | Ctrl+K for commands | click Simple again for Advanced";
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 80;
+  pointer-events: none;
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: rgba(245, 247, 250, 0.9);
+  background: rgba(14, 16, 20, 0.82);
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.cc-shell .clip-handle:active,
+.cc-shell .clip-block.trimming .clip-handle {
+  opacity: 1 !important;
+  width: 10px !important;
+  background: #00d68f !important;
+  box-shadow: 0 0 0 2px rgba(0, 214, 143, 0.4) !important;
+}
+.cc-shell.mag-dragging .clip-block.on {
+  outline: 2px solid rgba(34, 211, 238, 0.65) !important;
+  outline-offset: 1px !important;
+}
+.cc-shell.mag-dragging .playhead::after {
+  box-shadow:
+    0 0 14px rgba(34, 211, 238, 0.95),
+    0 0 28px rgba(34, 211, 238, 0.45) !important;
+}
+
+.cc-shell .cmd-hint-banner {
+  margin: 0 !important;
+  padding: 8px 12px 6px !important;
+  font-size: 11px !important;
+  line-height: 1.4 !important;
+  color: rgba(245, 247, 250, 0.55) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+.cc-shell .cmd-item-hint {
+  color: rgba(245, 247, 250, 0.45) !important;
+  margin-left: 8px !important;
+  font-size: 11px !important;
 }
